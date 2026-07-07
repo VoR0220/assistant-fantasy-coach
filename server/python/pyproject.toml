@@ -1,0 +1,24 @@
+[project]
+name = "sports-trends-backend"
+version = "1.0.0"
+description = "Python MCP server + long-running cron agents for multi-sport fantasy trends and news"
+requires-python = ">=3.10"
+dependencies = [
+    "mcp>=1.2.0",
+    "httpx>=0.27.0",
+    "feedparser>=6.0.11",
+    "apscheduler>=3.10.4",
+    "python-dotenv>=1.0.1",
+]
+
+[project.scripts]
+sports-mcp = "sports_trends.mcp_server:main"
+sports-cron = "sports_trends.cron_agent:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["sports_trends*"]

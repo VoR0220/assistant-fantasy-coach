@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "sports-trends": {
+      "command": "server/python/.venv/bin/python",
+      "args": ["-m", "sports_trends.mcp_server"],
+      "cwd": "server/python",
+      "env": {
+        "API_URL": "http://localhost:5000",
+        "INTERNAL_SERVICE_KEY": "dev-internal-key"
+      }
+    }
+  }
+}

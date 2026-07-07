@@ -1,0 +1,15 @@
+{
+  "name": "fantasy-football-app",
+  "private": true,
+  "workspaces": [
+    "server",
+    "mobile"
+  ],
+  "scripts": {
+    "dev:server": "npm run dev -w server",
+    "build": "npm run build -w server",
+    "py:setup": "cd server/python && python3 -m venv .venv && .venv/bin/pip install -r requirements.txt",
+    "mcp:server": "cd server/python && .venv/bin/python -m sports_trends.mcp_server",
+    "agent:cron": "cd server/python && .venv/bin/python -m sports_trends.cron_agent"
+  }
+}

@@ -1,0 +1,26 @@
+services:
+  mongodb:
+    image: mongo:7
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongodb_data:/data/db
+    environment:
+      MONGO_INITDB_DATABASE: fantasyfootball
+
+  cron-agent:
+    build:
+      context: ./server/python
+    command: python -m sports_trends.cron_agent
+    environment:
+      API_URL: http://host.docker.internal:5000
+      INTERNAL_SERVICE_KEY: ${INTERNAL_SERVICE_KEY:-dev-internal-key}
+      WEEKLY_AGENT_CRON: ${WEEKLY_AGENT_CRON:-0 14 * * 2}
+      NEWS_WATCH_INTERVAL_MINUTES: ${NEWS_WATCH_INTERVAL_MINUTES:-60}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
+    profiles: ["agents"]
+
+volumes:
+  mongodb_data:

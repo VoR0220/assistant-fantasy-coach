@@ -1,0 +1,29 @@
+{
+  "expo": {
+    "name": "Fantasy Football Agent",
+    "slug": "fantasy-football-agent",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "scheme": "fantasyagent",
+    "userInterfaceStyle": "automatic",
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.fantasyfootball.agent"
+    },
+    "android": {
+      "package": "com.fantasyfootball.agent"
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-notifications",
+        {
+          "color": "#1a472a"
+        }
+      ]
+    ],
+    "extra": {
+      "apiUrl": "http://localhost:5000"
+    }
+  }
+}
