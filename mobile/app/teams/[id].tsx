@@ -43,6 +43,12 @@ export default function TeamDetailScreen() {
     setTeam(t);
   }
 
+  async function toggleAutoPilot(value: boolean) {
+    if (!id) return;
+    const { team: t } = await api.setAutoPilot(id, value);
+    setTeam(t);
+  }
+
   async function sync() {
     if (!id) return;
     const { team: t } = await api.syncTeam(id);
@@ -66,6 +72,21 @@ export default function TeamDetailScreen() {
       <View style={styles.row}>
         <Text style={styles.rowLabel}>Weekly roster agent</Text>
         <Switch value={team.agentOptIn} onValueChange={toggleOptIn} trackColor={{ true: '#1a472a' }} />
+      </View>
+
+      <View style={styles.row}>
+        <View style={styles.rowText}>
+          <Text style={styles.rowLabel}>Gameday auto-pilot</Text>
+          <Text style={styles.rowHint}>
+            Automatically bench OUT players and start backups at game time
+          </Text>
+        </View>
+        <Switch
+          value={team.autoPilot !== false}
+          onValueChange={toggleAutoPilot}
+          disabled={!team.agentOptIn}
+          trackColor={{ true: '#1a472a' }}
+        />
       </View>
 
       <Pressable style={styles.syncBtn} onPress={sync}>
@@ -130,6 +151,8 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   rowLabel: { fontSize: 16, fontWeight: '500' },
+  rowText: { flex: 1, marginRight: 12 },
+  rowHint: { fontSize: 12, color: '#666', marginTop: 4 },
   syncBtn: {
     margin: 16,
     backgroundColor: '#fff',

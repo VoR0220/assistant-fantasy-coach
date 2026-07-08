@@ -125,6 +125,41 @@ async def run_roster_agent(
     return _dump(result)
 
 
+@mcp.tool()
+async def get_news_history(sport: str = "nfl", since_hours: int = 72, limit: int = 100) -> str:
+    """Get persisted news headlines from the backend (newest first, with ageHours).
+
+    Args:
+        sport: League key.
+        since_hours: Lookback window in hours (default 72).
+        limit: Max headlines.
+    """
+    return _dump(await data.get_news_history(sport, since_hours, limit))
+
+
+@mcp.tool()
+async def get_decision_history(team_id: str) -> str:
+    """Get recent accept/dismiss outcomes and tag weights for a team.
+
+    Args:
+        team_id: MongoDB team ID.
+    """
+    return _dump(await data.get_decision_history(team_id))
+
+
+@mcp.tool()
+async def run_gameday_check(
+    team_id: str | None = None, sport: str | None = None
+) -> str:
+    """Run game-time auto-pilot injury lineup checks (sync + auto-execute where possible).
+
+    Args:
+        team_id: Optional specific team; omit to run all auto-pilot teams.
+        sport: Optional sport filter when running all teams.
+    """
+    return _dump(await data.trigger_gameday_check(team_id, sport))
+
+
 def main() -> None:
     mcp.run(transport="stdio")
 

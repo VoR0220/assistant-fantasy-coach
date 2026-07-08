@@ -59,3 +59,35 @@ export async function notifyWeeklyRecommendations(
     { screen: 'Recommendations', teamId, week: String(week) }
   );
 }
+
+export async function notifyAutoLineupChange(
+  user: IUser,
+  teamName: string,
+  sitName: string,
+  startName: string,
+  week: number,
+  teamId: string
+): Promise<void> {
+  await sendPushToUser(
+    user,
+    `Auto-pilot: ${teamName}`,
+    `Benched ${sitName}, started ${startName} for week ${week}`,
+    { screen: 'Recommendations', teamId, week: String(week) }
+  );
+}
+
+export async function notifyUrgentLineupAlert(
+  user: IUser,
+  teamName: string,
+  playerName: string,
+  injuryStatus: string,
+  deepLink: string | undefined,
+  teamId: string
+): Promise<void> {
+  await sendPushToUser(
+    user,
+    `Urgent: fix ${teamName} lineup`,
+    `${playerName} is ${injuryStatus}. Auto-pilot could not update your lineup — tap to fix before lock.`,
+    { screen: 'Recommendations', teamId, deepLink: deepLink ?? '' }
+  );
+}

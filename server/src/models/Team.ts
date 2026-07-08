@@ -26,6 +26,7 @@ export interface ITeam extends Document {
   freeAgentsCache?: IFreeAgentsCache;
   platformRaw: IPlatformRaw;
   agentOptIn: boolean;
+  autoPilot: boolean;
   lastSyncedAt?: Date;
   rosterHistory?: Array<{ week: number; roster: NormalizedRoster; syncedAt: Date }>;
   createdAt: Date;
@@ -82,6 +83,7 @@ const teamSchema = new Schema<ITeam>(
       lastSettingsResponse: Schema.Types.Mixed,
     },
     agentOptIn: { type: Boolean, default: false },
+    autoPilot: { type: Boolean, default: true },
     lastSyncedAt: Date,
     rosterHistory: [
       {

@@ -103,4 +103,20 @@ router.patch(
   }
 );
 
+router.patch(
+  '/:id/auto-pilot',
+  authMiddleware,
+  body('autoPilot').isBoolean(),
+  async (req: AuthRequest, res: Response) => {
+    const team = await Team.findOne({ _id: req.params.id, userId: req.userId });
+    if (!team) {
+      res.status(404).json({ error: 'Team not found' });
+      return;
+    }
+    team.autoPilot = req.body.autoPilot as boolean;
+    await team.save();
+    res.json({ team });
+  }
+);
+
 export default router;

@@ -3,7 +3,7 @@ import { Team } from '../models/Team.js';
 import { User, getDecryptedCredentials } from '../models/User.js';
 import { getAdapter } from './fantasy-platform/index.js';
 import { generateInjuryLineupRecommendations, getCurrentWeek } from './roster-optimizer/index.js';
-import type { LineupChange, PlatformCredentials, Sport } from '../types/index.js';
+import type { LineupChange, PlatformCredentials, Sport, TransactionResult } from '../types/index.js';
 import {
   notifyAutoLineupChange,
   notifyUrgentLineupAlert,
@@ -90,10 +90,9 @@ export async function runGamedayCheckForTeam(teamId: string): Promise<GamedayChe
         },
       ];
 
-      let executionResult = {
+      let executionResult: TransactionResult = {
         success: false,
         message: 'Lineup write not supported for this platform',
-        deepLink: undefined as string | undefined,
       };
 
       if (adapter.submitLineupChange) {
@@ -139,11 +138,13 @@ export async function runGamedayCheckForTeam(teamId: string): Promise<GamedayChe
       } else {
         failed += 1;
         if (user) {
+          const injuryLabel =
+            sit.reasonTags?.find((t) => t !== 'injured_starter') ?? 'OUT';
           await notifyUrgentLineupAlert(
             user,
             synced.teamName,
             sit.name,
-            sit.injuryStatus ?? 'OUT',
+            injuryLabel,
             executionResult.deepLink,
             String(synced._id)
           );

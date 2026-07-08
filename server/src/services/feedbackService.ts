@@ -57,7 +57,7 @@ export async function getDecisionHistory(teamId: string) {
     })
       .sort({ decidedAt: -1, updatedAt: -1 })
       .limit(50)
-      .select('kind status confidence rationale dropPlayer addPlayer lineupAction decidedAt week')
+      .select('kind status confidence rationale dropPlayer addPlayer lineupAction decidedAt week updatedAt')
       .lean(),
     getTagWeightsForTeam(teamId),
   ]);

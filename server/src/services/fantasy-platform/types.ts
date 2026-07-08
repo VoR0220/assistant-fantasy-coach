@@ -3,6 +3,7 @@ import type {
   FAFilter,
   LeagueSettings,
   LeagueSummary,
+  LineupChange,
   NormalizedRoster,
   Platform,
   PlatformCredentials,

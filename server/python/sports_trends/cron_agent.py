@@ -18,7 +18,7 @@ import logging
 import os
 import re
 import signal
-from datetime import datetime
+from datetime import datetime, timezone
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
@@ -39,6 +39,15 @@ log = logging.getLogger("cron-agent")
 # Tuesday 14:00 UTC default — after Monday games, before waivers clear (NFL).
 WEEKLY_CRON = os.environ.get("WEEKLY_AGENT_CRON", "0 14 * * 2")
 NEWS_INTERVAL_MINUTES = int(os.environ.get("NEWS_WATCH_INTERVAL_MINUTES", "60"))
+GAMEDAY_INTERVAL_MINUTES = int(os.environ.get("GAMEDAY_CHECK_INTERVAL_MINUTES", "15"))
+
+# Typical game windows in UTC (conservative; cron still safe if outside)
+GAMEDAY_WINDOWS: dict[str, list[tuple[int, int]]] = {
+    "nfl": [(17, 5)],   # Sun 17:00–Mon 05:00 UTC
+    "nba": [(23, 8)],   # Evening US
+    "mlb": [(17, 5)],
+    "nhl": [(23, 8)],
+}
 
 BREAKING_NEWS = re.compile(
     r"injur|ruled out|out for|placed on (ir|il)|suspend|surgery|torn|fracture"
@@ -140,6 +149,32 @@ async def news_watch(sport: str) -> None:
         log.exception("News watch failed for %s", sport)
 
 
+async def gameday_check(sport: str) -> None:
+    """Periodic auto-pilot: sync rosters and execute injury-driven lineup fixes."""
+    now = datetime.now(timezone.utc)
+    windows = GAMEDAY_WINDOWS.get(sport, [(0, 24)])
+    in_window = any(
+        (start <= end and start <= now.hour < end)
+        or (start > end and (now.hour >= start or now.hour < end))
+        for start, end in windows
+    )
+    if not in_window:
+        return
+
+    log.info("Gameday auto-pilot check for %s", sport)
+    try:
+        result = await data.trigger_gameday_check(sport=sport)
+        results = result.get("results", [])
+        executed = sum(r.get("executed", 0) for r in results)
+        failed = sum(r.get("failed", 0) for r in results)
+        log.info(
+            "Gameday %s complete: %d teams, %d executed, %d failed",
+            sport, len(results), executed, failed,
+        )
+    except Exception:
+        log.exception("Gameday check failed for %s", sport)
+
+
 async def run_daemon() -> None:
     scheduler = AsyncIOScheduler()
 
@@ -161,11 +196,21 @@ async def run_daemon() -> None:
             name=f"News watcher ({sport_key})",
             misfire_grace_time=600,
         )
+        scheduler.add_job(
+            gameday_check,
+            "interval",
+            minutes=GAMEDAY_INTERVAL_MINUTES,
+            args=[sport_key],
+            id=f"gameday-{sport_key}",
+            name=f"Gameday auto-pilot ({sport_key})",
+            misfire_grace_time=300,
+        )
 
     scheduler.start()
     log.info(
-        "Cron agent daemon started: weekly cron '%s', news watch every %dm, sports: %s",
-        WEEKLY_CRON, NEWS_INTERVAL_MINUTES, ", ".join(SPORTS),
+        "Cron agent daemon started: weekly cron '%s', news watch every %dm, "
+        "gameday every %dm, sports: %s",
+        WEEKLY_CRON, NEWS_INTERVAL_MINUTES, GAMEDAY_INTERVAL_MINUTES, ", ".join(SPORTS),
     )
 
     # Prime the news watchers once at startup so state is warm.

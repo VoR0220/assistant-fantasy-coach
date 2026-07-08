@@ -66,6 +66,11 @@ export const api = {
       method: 'PATCH',
       body: JSON.stringify({ agentOptIn }),
     }),
+  setAutoPilot: (id: string, autoPilot: boolean) =>
+    request<{ team: Team }>(`/api/teams/${id}/auto-pilot`, {
+      method: 'PATCH',
+      body: JSON.stringify({ autoPilot }),
+    }),
   getRecommendations: (params?: { week?: number; teamId?: string; status?: string }) => {
     const q = new URLSearchParams();
     if (params?.week) q.set('week', String(params.week));
@@ -126,6 +131,7 @@ export interface Team {
   leagueName: string;
   teamName: string;
   agentOptIn: boolean;
+  autoPilot?: boolean;
   roster?: {
     starters: Array<{ playerId: string; name: string; position: string }>;
     bench: Array<{ playerId: string; name: string; position: string }>;
