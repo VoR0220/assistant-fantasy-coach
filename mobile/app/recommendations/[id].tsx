@@ -41,6 +41,20 @@ function approveLabel(kind?: Recommendation['kind'], dropName?: string): string 
 }
 
 type DropChoice = NonNullable<Recommendation['dropPlayer']>;
+type RationaleEntry = Recommendation['rationale'][number];
+
+function parseRationaleLine(entry: RationaleEntry): {
+  text: string;
+  source: string;
+  url?: string;
+} {
+  if (typeof entry === 'string') {
+    const m = entry.match(/^(.*?)\s*\[([^\]]+)\]\s*$/);
+    if (m) return { text: m[1], source: m[2] };
+    return { text: entry, source: 'Agent' };
+  }
+  return { text: entry.text, source: entry.source, url: entry.url };
+}
 
 function DropChoiceRadio({
   choices,
@@ -96,7 +110,16 @@ export default function RecommendationDetailScreen() {
     if (!id) return;
     api.getRecommendation(id).then(({ recommendation }) => {
       setRec(recommendation);
-      setSelectedDropId(recommendation.dropPlayer?.playerId ?? null);
+      const alts = recommendation.dropAlternatives;
+      const dropId = recommendation.dropPlayer?.playerId;
+      // Prefer dropPlayer when it's among the equal choices; otherwise first alternative.
+      const initialId =
+        alts && alts.length > 1
+          ? alts.some((a) => a.playerId === dropId)
+            ? dropId!
+            : alts[0].playerId
+          : dropId ?? null;
+      setSelectedDropId(initialId);
     }).catch(console.error);
   }, [id]);
 
@@ -108,7 +131,10 @@ export default function RecommendationDetailScreen() {
         : [];
 
   const selectedDrop =
-    dropChoices.find((c) => c.playerId === selectedDropId) ?? rec?.dropPlayer ?? null;
+    dropChoices.find((c) => c.playerId === selectedDropId) ??
+    dropChoices[0] ??
+    rec?.dropPlayer ??
+    null;
 
   async function approve() {
     if (!id) return;
@@ -248,9 +274,26 @@ export default function RecommendationDetailScreen() {
       )}
 
       <Text style={styles.section}>Why</Text>
-      {rec.rationale.map((r, i) => (
-        <Text key={i} style={styles.rationale}>• {r}</Text>
-      ))}
+      {rec.rationale.map((r, i) => {
+        const line = parseRationaleLine(r);
+        return (
+          <View key={i} style={styles.rationaleBlock}>
+            <Text style={styles.rationale}>• {line.text}</Text>
+            <Text style={styles.citation}>
+              {line.url ? (
+                <Text
+                  style={styles.citationLink}
+                  onPress={() => Linking.openURL(line.url!)}
+                >
+                  Source: {line.source}
+                </Text>
+              ) : (
+                `Source: ${line.source}`
+              )}
+            </Text>
+          </View>
+        );
+      })}
 
       {rec.newsSnippets?.length ? (
         <>
@@ -292,7 +335,10 @@ const styles = StyleSheet.create({
   meta: { color: '#666' },
   tags: { fontSize: 12, color: '#1a472a', marginTop: 8 },
   section: { fontWeight: '700', fontSize: 16, marginTop: 20, marginBottom: 8 },
-  rationale: { marginBottom: 6, lineHeight: 20 },
+  rationale: { marginBottom: 2, lineHeight: 20 },
+  rationaleBlock: { marginBottom: 12 },
+  citation: { fontSize: 12, color: '#6b7280', marginLeft: 12, marginTop: 2, lineHeight: 16 },
+  citationLink: { fontSize: 12, color: '#1a472a', textDecorationLine: 'underline' },
   newsCard: { backgroundColor: '#fff', padding: 12, borderRadius: 8, marginBottom: 8 },
   newsHeadline: { fontWeight: '600' },
   newsSource: { fontSize: 12, color: '#888', marginTop: 4 },

@@ -96,7 +96,7 @@ export async function sleeperLogin(
   }
 }
 
-interface SleeperPlayer {
+export interface SleeperPlayer {
   player_id: string;
   full_name?: string;
   first_name?: string;
@@ -150,6 +150,12 @@ async function getPlayersMap(sportKey = 'nfl'): Promise<Record<string, SleeperPl
   const map = await sleeperFetch<Record<string, SleeperPlayer>>(`/players/${sportKey}`);
   playersCaches[sportKey] = { map, at: Date.now() };
   return map;
+}
+
+export async function getSleeperPlayersMap(
+  sportKey = 'nfl'
+): Promise<Record<string, SleeperPlayer>> {
+  return getPlayersMap(sportKey);
 }
 
 function resolvePlayer(id: string, map: Record<string, SleeperPlayer>): import('../../types/index.js').PlayerEntry {
@@ -666,5 +672,3 @@ export async function getSleeperTrending(
     `/players/${sportKey}/trending/${type}?lookback_hours=${lookbackHours}&limit=${limit}`
   );
 }
-
-export { getPlayersMap as getSleeperPlayersMap };

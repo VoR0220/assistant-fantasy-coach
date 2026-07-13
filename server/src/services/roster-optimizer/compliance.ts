@@ -4,6 +4,7 @@ import {
   isTaxiStashCandidate,
   scorePlayerAvailability,
 } from './playerAvailability.js';
+import { citeLeague, citeRules, citeSleeper } from './citations.js';
 
 export interface ComplianceInput {
   team: ITeam;
@@ -186,9 +187,18 @@ export function generateRosterComplianceRecommendations(
         },
         confidence: 0.92,
         rationale: [
-          `Roster over limit by ${overBy} (${countable}/${maxSize} countable players)`,
-          `Move ${player.name} to taxi — ${player.yearsExp ?? 0} yr(s) exp (league max ${taxiYears} for taxi)`,
-          'Taxi players do not count against your roster limit on Sleeper',
+          citeLeague(
+            `Roster over limit by ${overBy} (${countable}/${maxSize} countable players)`,
+            `max_roster_size=${maxSize}; taxi excluded`
+          ),
+          citeSleeper(
+            `Move ${player.name} to taxi — ${player.yearsExp ?? 0} yr(s) exp (league max ${taxiYears} for taxi)`,
+            `years_exp=${player.yearsExp ?? 0}`
+          ),
+          citeLeague(
+            'Taxi players do not count against your roster limit on Sleeper',
+            `taxi_slots=${taxiSlots}`
+          ),
         ],
         newsSnippets: [],
       });
@@ -224,17 +234,35 @@ export function generateRosterComplianceRecommendations(
         dropAlternatives: altRefs.length > 1 ? altRefs : undefined,
         confidence: Math.min(0.98, 0.75 + score * 0.2),
         rationale: [
-          `Roster over limit by ${overBy} (${countable}/${maxSize} countable; taxi squad excluded)`,
-          `Drop ${player.name} (${player.position}) — ${summary}`,
-          altRefs.length > 1
-            ? `Equally good cuts: ${altRefs.map((a) => a.name).join(', ')} — pick any in the app`
-            : taxiSlots > 0
-              ? `Taxi squad: ${taxiCount}/${taxiSlots} filled`
-              : 'No taxi squad in this league',
-          altRefs.length > 1 && taxiSlots > 0
-            ? `Taxi squad: ${taxiCount}/${taxiSlots} filled`
-            : '',
-        ].filter(Boolean),
+          citeLeague(
+            `Roster over limit by ${overBy} (${countable}/${maxSize} countable; taxi squad excluded)`,
+            `countable=${countable}, max=${maxSize}`
+          ),
+          citeSleeper(
+            `Drop ${player.name} (${player.position}) — ${summary}`,
+            player.team
+              ? `team=${player.team}; status=${player.playerStatus ?? 'Active'}`
+              : 'nflTeam=null (not on an NFL roster)'
+          ),
+          ...(altRefs.length > 1
+            ? [
+                citeRules(
+                  `Equally good cuts: ${altRefs.map((a) => a.name).join(', ')} — pick any in the app`,
+                  `same availability tier (${tags.filter((t) => ['no_nfl_team', 'inactive', 'free_agent'].includes(t)).join('/') || 'depth'})`
+                ),
+              ]
+            : []),
+          ...(taxiSlots > 0
+            ? [
+                citeLeague(
+                  `Taxi squad: ${taxiCount}/${taxiSlots} filled`,
+                  `taxi_slots=${taxiSlots}`
+                ),
+              ]
+            : [
+                citeLeague('No taxi squad in this league', 'taxi_slots=0'),
+              ]),
+        ],
         newsSnippets: [],
       });
       used.add(player.playerId);

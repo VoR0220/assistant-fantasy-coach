@@ -14,7 +14,9 @@ export function DebugLogOverlay() {
   const [entries, setEntries] = useState<DebugEntry[]>([]);
   const [open, setOpen] = useState(false);
 
-  useEffect(() => subscribeDebugLog(setEntries), []);
+  useEffect(() => {
+    return subscribeDebugLog(setEntries);
+  }, []);
 
   const sleeperEntries = entries.filter((e) => e.tag === 'SleeperLogin');
   if (sleeperEntries.length === 0) return null;

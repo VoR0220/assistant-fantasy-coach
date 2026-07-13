@@ -6,6 +6,8 @@ import { User, getDecryptedCredentials } from '../models/User.js';
 import { discoverLeagues, importTeamsFromPlatform, syncTeam } from '../services/teamSync.js';
 import { runAgentForTeam } from '../services/agentService.js';
 import { getRosterComplianceSummary } from '../services/roster-optimizer/compliance.js';
+import { runSeasonBacktest } from '../services/backtestService.js';
+import { BacktestRun } from '../models/BacktestRun.js';
 import type { Platform, PlatformCredentials, Sport } from '../types/index.js';
 
 const router = Router();
@@ -123,6 +125,58 @@ router.post('/:id/run-agent', authMiddleware, async (req: AuthRequest, res: Resp
   } catch (err) {
     res.status(400).json({ error: (err as Error).message });
   }
+});
+
+/**
+ * Replay last season week-by-week using only news available at each week's
+ * decision cutoff (no look-ahead). Compares news-driven lineup vs actual and
+ * writes trained tag weights onto the team.
+ */
+router.post('/:id/backtest', authMiddleware, async (req: AuthRequest, res: Response) => {
+  const team = await Team.findOne({ _id: req.params.id, userId: req.userId });
+  if (!team) {
+    res.status(404).json({ error: 'Team not found' });
+    return;
+  }
+  try {
+    const result = await runSeasonBacktest(team, String(req.userId), {
+      season: req.body.season ? Number(req.body.season) : undefined,
+      startWeek: req.body.startWeek ? Number(req.body.startWeek) : undefined,
+      endWeek: req.body.endWeek ? Number(req.body.endWeek) : undefined,
+      lookbackHours: req.body.lookbackHours ? Number(req.body.lookbackHours) : 168,
+      synthesize: req.body.synthesize !== false,
+    });
+    res.json(result);
+  } catch (err) {
+    res.status(400).json({ error: (err as Error).message });
+  }
+});
+
+router.get('/:id/backtests', authMiddleware, async (req: AuthRequest, res: Response) => {
+  const team = await Team.findOne({ _id: req.params.id, userId: req.userId });
+  if (!team) {
+    res.status(404).json({ error: 'Team not found' });
+    return;
+  }
+  const runs = await BacktestRun.find({ teamId: team._id })
+    .sort({ createdAt: -1 })
+    .limit(10)
+    .select('-weeks.swapsApplied');
+  res.json({ backtests: runs });
+});
+
+router.get('/:id/backtests/:runId', authMiddleware, async (req: AuthRequest, res: Response) => {
+  const team = await Team.findOne({ _id: req.params.id, userId: req.userId });
+  if (!team) {
+    res.status(404).json({ error: 'Team not found' });
+    return;
+  }
+  const run = await BacktestRun.findOne({ _id: req.params.runId, teamId: team._id });
+  if (!run) {
+    res.status(404).json({ error: 'Backtest not found' });
+    return;
+  }
+  res.json({ backtest: run });
 });
 
 router.patch(

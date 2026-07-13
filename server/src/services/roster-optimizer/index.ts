@@ -16,6 +16,7 @@ import { generateAllLineupRecommendations, generateInjuryLineupRecommendations }
 import { generateRosterComplianceRecommendations } from './compliance.js';
 import { assessTeam, maxRecommendationsForGoal } from './planner.js';
 import { scorePlayerAvailability } from './playerAvailability.js';
+import { citeAgent, citeNews, citeRules } from './citations.js';
 
 const INJURY_DROP = new Set(['OUT', 'IR', 'PUP', 'SUSP', 'DOUBTFUL']);
 
@@ -292,11 +293,21 @@ export function generateSwapRecommendations(input: OptimizerInput): SwapRecommen
       },
       confidence,
       rationale: [
-        `Drop ${drop.player.name} — ${drop.summary || drop.tags.join(', ') || 'underperforming'}`,
-        `Add ${add.player.name} (${add.tags.join(', ') || 'waiver target'})`,
-        ...dropNews.slice(0, 1).map((n) => `News: ${n.headline} (${n.source})`),
-        ...addNews.slice(0, 1).map((n) => `News: ${n.headline} (${n.source})`),
-        `Projected roster improvement for ${team.teamName}`,
+        citeRules(
+          `Drop ${drop.player.name} — ${drop.summary || drop.tags.join(', ') || 'underperforming'}`,
+          drop.tags.join(', ') || 'waiver drop scoring'
+        ),
+        citeRules(
+          `Add ${add.player.name} (${add.tags.join(', ') || 'waiver target'})`,
+          add.tags.join(', ') || 'waiver add scoring'
+        ),
+        ...dropNews.slice(0, 1).map((n) =>
+          citeNews(`Drop context: ${n.headline}`, n)
+        ),
+        ...addNews.slice(0, 1).map((n) =>
+          citeNews(`Add context: ${n.headline}`, n)
+        ),
+        citeAgent(`Projected roster improvement for ${team.teamName}`, 'waiver synthesis'),
       ],
       newsSnippets: [...dropNews, ...addNews].slice(0, 5),
     });

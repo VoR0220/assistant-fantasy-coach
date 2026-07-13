@@ -27,6 +27,9 @@ export interface ITeam extends Document {
   platformRaw: IPlatformRaw;
   agentOptIn: boolean;
   autoPilot: boolean;
+  /** Tag weights learned from season backtests (merged into agent scoring) */
+  backtestTagWeights?: Record<string, number>;
+  lastBacktestAt?: Date;
   lastSyncedAt?: Date;
   rosterHistory?: Array<{ week: number; roster: NormalizedRoster; syncedAt: Date }>;
   createdAt: Date;
@@ -93,6 +96,8 @@ const teamSchema = new Schema<ITeam>(
     },
     agentOptIn: { type: Boolean, default: false },
     autoPilot: { type: Boolean, default: true },
+    backtestTagWeights: { type: Map, of: Number },
+    lastBacktestAt: Date,
     lastSyncedAt: Date,
     rosterHistory: [
       {

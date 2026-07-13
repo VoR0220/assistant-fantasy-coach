@@ -52,8 +52,9 @@ export default function SleeperLoginScreen() {
         params: { connected: 'sleeper' },
       });
     } catch (err) {
-      setSaving(false);
       setError((err as Error).message);
+    } finally {
+      setSaving(false);
     }
   }
 

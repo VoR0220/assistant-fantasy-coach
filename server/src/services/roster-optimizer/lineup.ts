@@ -6,6 +6,7 @@ import type {
   SwapRecommendationInput,
 } from '../../types/index.js';
 import { isInactivePlayer, isWithoutNflTeam } from './playerAvailability.js';
+import { citeLeague, citePerformance, citeRules, citeSleeper } from './citations.js';
 
 const MUST_SIT = new Set(['OUT', 'IR', 'PUP', 'SUSP', 'DOUBTFUL']);
 const QUESTIONABLE = new Set(['QUESTIONABLE', 'Q', 'GTD']);
@@ -120,8 +121,14 @@ export function generateInjuryLineupRecommendations(
         },
         confidence: 0.9,
         rationale: [
-          `Sit ${injured.name} (${injured.injuryStatus ?? 'injured'}) — currently in your ${targetSlot} slot`,
-          `No healthy bench player eligible for ${targetSlot}. Check waivers or move a FLEX player first.`,
+          citeSleeper(
+            `Sit ${injured.name} (${injured.injuryStatus ?? 'injured'}) — currently in your ${targetSlot} slot`,
+            `injury_status=${injured.injuryStatus ?? 'unknown'}; lineup_slot=${targetSlot}`
+          ),
+          citeLeague(
+            `No healthy bench player eligible for ${targetSlot}. Check waivers or move a FLEX player first.`,
+            'bench eligibility vs roster slots'
+          ),
         ],
         newsSnippets: [],
       });
@@ -138,9 +145,18 @@ export function generateInjuryLineupRecommendations(
       },
       confidence: injured.injuryStatus && MUST_SIT.has(injured.injuryStatus.toUpperCase()) ? 0.95 : 0.75,
       rationale: [
-        `Sit ${injured.name} (${injured.injuryStatus ?? 'injury risk'}) in ${targetSlot}`,
-        `Start ${replacement.name} from bench (+${benchScore(replacement, perfMap).toFixed(1)} avg pts)`,
-        `Avoid leaving an injured player in your active lineup`,
+        citeSleeper(
+          `Sit ${injured.name} (${injured.injuryStatus ?? 'injury risk'}) in ${targetSlot}`,
+          `injury_status=${injured.injuryStatus ?? 'unknown'}`
+        ),
+        citePerformance(
+          `Start ${replacement.name} from bench (+${benchScore(replacement, perfMap).toFixed(1)} avg pts)`,
+          `avgPoints=${benchScore(replacement, perfMap).toFixed(1)}`
+        ),
+        citeRules(
+          'Avoid leaving an injured player in your active lineup',
+          'injury lineup policy'
+        ),
       ],
       newsSnippets: [],
     });
@@ -195,11 +211,23 @@ export function generateFlexRepositionRecommendations(
       },
       confidence: injuredAtNative ? 0.92 : 0.7,
       rationale: [
-        `Move ${flexPlayer.name} from FLEX to ${nativePos} (${nativeFilled}/${nativeCap} filled)`,
-        `Frees FLEX for ${injuredAtNative ? 'an injury replacement or ' : ''}RB/WR/TE subs`,
+        citeLeague(
+          `Move ${flexPlayer.name} from FLEX to ${nativePos} (${nativeFilled}/${nativeCap} filled)`,
+          `${nativePos} slots ${nativeFilled}/${nativeCap}`
+        ),
+        citeRules(
+          `Frees FLEX for ${injuredAtNative ? 'an injury replacement or ' : ''}RB/WR/TE subs`,
+          'flex optimization'
+        ),
         injuredAtNative
-          ? `You have an injured ${nativePos} — opening FLEX gives more substitution options`
-          : `Proactive flex management: keep FLEX open before another position needs a sub`,
+          ? citeSleeper(
+              `You have an injured ${nativePos} — opening FLEX gives more substitution options`,
+              'injury_status on native-position starter'
+            )
+          : citeRules(
+              'Proactive flex management: keep FLEX open before another position needs a sub',
+              'flex optimization'
+            ),
       ],
       newsSnippets: [],
     });
@@ -240,8 +268,14 @@ export function generateFlexRepositionRecommendations(
         },
         confidence: 0.85,
         rationale: [
-          `After moving a player off FLEX, start ${flexSub.name} in FLEX`,
-          `Covers ${injured.name} (${injured.injuryStatus}) at ${injured.position} indirectly`,
+          citeRules(
+            `After moving a player off FLEX, start ${flexSub.name} in FLEX`,
+            'flex freed for injury coverage'
+          ),
+          citeSleeper(
+            `Covers ${injured.name} (${injured.injuryStatus}) at ${injured.position} indirectly`,
+            `injury_status=${injured.injuryStatus ?? 'unknown'}`
+          ),
         ],
         newsSnippets: [],
       });

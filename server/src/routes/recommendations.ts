@@ -152,20 +152,20 @@ router.post('/:id/approve', authMiddleware, async (req: AuthRequest, res: Respon
     const selectedDropPlayerId = req.body?.selectedDropPlayerId as string | undefined;
     if (
       selectedDropPlayerId &&
-      (rec.kind === 'roster_drop' || rec.kind === 'add_drop') &&
-      selectedDropPlayerId !== rec.dropPlayer?.playerId
+      (rec.kind === 'roster_drop' || rec.kind === 'add_drop')
     ) {
       const alts = rec.dropAlternatives ?? [];
       const chosen =
         alts.find((a) => a.playerId === selectedDropPlayerId) ??
         (rec.dropPlayer?.playerId === selectedDropPlayerId ? rec.dropPlayer : undefined);
-      if (!chosen) {
+      if (chosen) {
+        rec.dropPlayer = chosen;
+      } else if (alts.length > 1) {
         res.status(400).json({
           error: 'selectedDropPlayerId is not among the equal drop alternatives',
         });
         return;
       }
-      rec.dropPlayer = chosen;
     }
 
     executionResult = await executeRecommendation(rec, team, credentials);

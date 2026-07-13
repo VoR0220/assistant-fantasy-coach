@@ -112,6 +112,23 @@ export interface NewsSnippet {
   publishedAt?: Date;
 }
 
+export type RationaleSourceKind =
+  | 'sleeper'
+  | 'news'
+  | 'league'
+  | 'mcp'
+  | 'rule_engine'
+  | 'performance'
+  | 'agent';
+
+/** One rationale claim with an explicit citation */
+export interface RationaleLine {
+  text: string;
+  source: string;
+  url?: string;
+  sourceKind?: RationaleSourceKind;
+}
+
 export interface PlatformCredentials {
   username?: string;
   /** Email or phone for Sleeper password sign-in */
@@ -184,7 +201,8 @@ export interface SwapRecommendationInput {
   addPlayer?: SwapPlayerRef;
   lineupAction?: LineupActionInput;
   confidence: number;
-  rationale: string[];
+  /** Preferred: cited claims. Strings still accepted for older callers. */
+  rationale: Array<string | RationaleLine>;
   newsSnippets: NewsSnippet[];
 }
 

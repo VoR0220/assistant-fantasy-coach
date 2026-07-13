@@ -106,7 +106,7 @@ router.get('/yahoo/oauth/callback', async (req: Request, res: Response) => {
 
     res.redirect(`${appUrl}?connected=yahoo`);
   } catch (err) {
-    fail((err as Error).message);
+    return fail((err as Error).message);
   }
 });
 

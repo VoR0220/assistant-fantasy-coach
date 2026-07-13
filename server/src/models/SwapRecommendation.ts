@@ -1,5 +1,11 @@
 import mongoose, { Schema, Document, Types } from 'mongoose';
-import type { SwapPlayerRef, NewsSnippet, RecommendationKind, LineupActionInput } from '../types/index.js';
+import type {
+  SwapPlayerRef,
+  NewsSnippet,
+  RecommendationKind,
+  LineupActionInput,
+  RationaleLine,
+} from '../types/index.js';
 
 export type RecommendationStatus = 'pending' | 'approved' | 'dismissed' | 'executed';
 
@@ -15,7 +21,7 @@ export interface ISwapRecommendation extends Document {
   addPlayer?: SwapPlayerRef;
   lineupAction?: LineupActionInput;
   confidence: number;
-  rationale: string[];
+  rationale: Array<string | RationaleLine>;
   newsSnippets: NewsSnippet[];
   status: RecommendationStatus;
   decidedAt?: Date;
@@ -71,7 +77,8 @@ const swapRecommendationSchema = new Schema<ISwapRecommendation>(
     addPlayer: swapPlayerSchema,
     lineupAction: lineupActionSchema,
     confidence: { type: Number, required: true, min: 0, max: 1 },
-    rationale: [String],
+    /** string (legacy) or { text, source, url, sourceKind } */
+    rationale: [Schema.Types.Mixed],
     newsSnippets: [newsSnippetSchema],
     status: {
       type: String,

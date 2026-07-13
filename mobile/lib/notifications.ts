@@ -36,14 +36,19 @@ export function useNotificationDeepLink(
     if (Platform.OS === 'web') return;
 
     let subscription: { remove: () => void } | undefined;
+    let cancelled = false;
 
     void import('expo-notifications').then((Notifications) => {
+      if (cancelled) return;
       subscription = Notifications.addNotificationResponseReceivedListener((response) => {
         const data = response.notification.request.content.data as Record<string, string>;
         if (data?.screen) onNavigate(data);
       });
     });
 
-    return () => subscription?.remove();
+    return () => {
+      cancelled = true;
+      subscription?.remove();
+    };
   }, [onNavigate]);
 }

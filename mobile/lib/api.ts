@@ -131,6 +131,37 @@ export const api = {
       team?: Team;
       compliance?: RosterCompliance;
     }>(`/api/lineup/${teamId}/analyze-lineup`, { method: 'POST' }),
+  runBacktest: (
+    teamId: string,
+    body?: {
+      season?: number;
+      startWeek?: number;
+      endWeek?: number;
+      lookbackHours?: number;
+      synthesize?: boolean;
+    }
+  ) =>
+    request<{
+      backtestId: string;
+      season: number;
+      summary: {
+        weeks: number;
+        weeksWithNews: number;
+        swapsApplied: number;
+        totalDelta: number;
+        avgDelta: number;
+        wins: number;
+        losses: number;
+      };
+      trainedTagWeights: Record<string, number>;
+      note?: string;
+      weeks: unknown[];
+    }>(`/api/teams/${teamId}/backtest`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
+  getBacktests: (teamId: string) =>
+    request<{ backtests: unknown[] }>(`/api/teams/${teamId}/backtests`),
 };
 
 export type Platform = 'sleeper' | 'espn' | 'yahoo';
@@ -193,7 +224,6 @@ export interface Recommendation {
   kind?: 'add_drop' | 'lineup_sit_start' | 'lineup_flex_move' | 'roster_drop' | 'move_to_taxi';
   week: number;
   confidence: number;
-  rationale: string[];
   status: string;
   dropPlayer?: { playerId: string; name: string; position: string; reasonTags?: string[] };
   /** Equal drop choices — pick one via radio before approving */
@@ -207,6 +237,10 @@ export interface Recommendation {
     toSlot?: string;
     freesSlot?: string;
   };
+  rationale: Array<
+    | string
+    | { text: string; source: string; url?: string; sourceKind?: string }
+  >;
   newsSnippets?: Array<{ headline: string; source: string; url?: string }>;
   teamId: Team | string;
   executionResult?: { success: boolean; message: string; deepLink?: string };

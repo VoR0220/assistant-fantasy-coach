@@ -149,17 +149,40 @@ export function formatIntelForLlm(intel: Record<string, PlayerIntelDossier>): st
     position: d.position,
     role: d.role,
     lineupSlot: d.lineupSlot,
-    nflTeam: d.nflTeam,
-    injury: d.injuryStatus,
-    avgPoints: d.avgPoints,
-    last3Weeks: d.pointsLast3Weeks,
-    depthAtPosition: d.depthAtPosition,
-    newsSentiment: d.newsSentiment,
-    availability: d.availabilitySummary,
-    news: d.news.map((n) => ({
+    citedFacts: {
+      nflTeam: {
+        value: d.nflTeam,
+        source: 'Sleeper player DB',
+        note: d.nflTeam ? `On ${d.nflTeam}` : 'null — not on an NFL roster',
+      },
+      playerStatus: {
+        value: d.playerStatus,
+        source: 'Sleeper player DB',
+      },
+      injuryStatus: {
+        value: d.injuryStatus,
+        source: 'Sleeper roster sync',
+      },
+      avgPoints: {
+        value: d.avgPoints,
+        last3Weeks: d.pointsLast3Weeks,
+        source: 'League scoring / recent performance',
+      },
+      depthAtPosition: {
+        value: d.depthAtPosition,
+        source: 'Team roster (starters + bench)',
+      },
+      availability: {
+        value: d.availabilitySummary,
+        source: 'Rule engine · player availability',
+      },
+    },
+    newsFromMcpRss: d.news.map((n) => ({
       headline: n.headline,
       source: n.source,
-      publishedAt: n.publishedAt,
+      url: n.url ?? null,
+      publishedAt: n.publishedAt ?? null,
+      citationLabel: `News / MCP · ${n.source}${n.headline ? ` · “${n.headline}”` : ''}`,
     })),
   }));
   return JSON.stringify(dossiers, null, 2);

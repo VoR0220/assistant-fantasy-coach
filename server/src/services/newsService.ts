@@ -112,6 +112,43 @@ export async function getRecentLeagueNews(
   }));
 }
 
+/**
+ * Time-locked news for backtests: only headlines published in (asOf - lookback, asOf].
+ * Undated items are excluded — they cannot be proven available at decision time.
+ */
+export async function getNewsAsOf(
+  sport: Sport,
+  options: { asOf: Date; lookbackHours?: number; limit?: number }
+): Promise<NewsSnippet[]> {
+  const lookbackHours = options.lookbackHours ?? DEFAULT_WINDOW_HOURS;
+  const asOf = options.asOf;
+  const from = new Date(asOf.getTime() - lookbackHours * 60 * 60 * 1000);
+
+  const items = await NewsItem.find({
+    sport,
+    publishedAt: { $gt: from, $lte: asOf },
+  })
+    .sort({ publishedAt: -1 })
+    .limit(options.limit ?? 100)
+    .lean();
+
+  return items.map((item) => ({
+    headline: item.headline,
+    source: item.source,
+    url: item.url,
+    publishedAt: item.publishedAt ? new Date(item.publishedAt) : undefined,
+  }));
+}
+
+/**
+ * Recency weight relative to a historical decision time (asOf), not now.
+ */
+export function newsRecencyMultiplierAsOf(publishedAt: Date | undefined, asOf: Date): number {
+  if (!publishedAt) return 0;
+  const ageHours = Math.max(0, (asOf.getTime() - publishedAt.getTime()) / (1000 * 60 * 60));
+  return Math.exp(-ageHours / 36);
+}
+
 export async function getBreakingHeadlines(
   sport: Sport,
   maxAgeHours: number

@@ -1,4 +1,5 @@
 import { SwapRecommendation } from '../models/SwapRecommendation.js';
+import { Team } from '../models/Team.js';
 
 const INJURY_LINEUP_KINDS = new Set(['lineup_sit_start', 'lineup_flex_move']);
 
@@ -23,12 +24,15 @@ function collectTags(rec: {
 }
 
 export async function getTagWeightsForTeam(teamId: string): Promise<Record<string, number>> {
-  const recs = await SwapRecommendation.find({
-    teamId,
-    status: { $in: ['approved', 'dismissed', 'executed'] },
-  })
-    .select('kind dropPlayer addPlayer lineupAction status')
-    .lean();
+  const [recs, team] = await Promise.all([
+    SwapRecommendation.find({
+      teamId,
+      status: { $in: ['approved', 'dismissed', 'executed'] },
+    })
+      .select('kind dropPlayer addPlayer lineupAction status')
+      .lean(),
+    Team.findById(teamId).select('backtestTagWeights').lean(),
+  ]);
 
   const stats: Record<string, { accepted: number; dismissed: number }> = {};
 
@@ -46,6 +50,19 @@ export async function getTagWeightsForTeam(teamId: string): Promise<Record<strin
   for (const [tag, { accepted, dismissed }] of Object.entries(stats)) {
     weights[tag] = (accepted + 1) / (accepted + dismissed + 2);
   }
+
+  // Blend season-backtest training (0.4 backtest / 0.6 live feedback when both exist)
+  const bt = team?.backtestTagWeights;
+  if (bt) {
+    const entries =
+      bt instanceof Map ? [...bt.entries()] : Object.entries(bt as Record<string, number>);
+    for (const [tag, w] of entries) {
+      const n = Number(w);
+      if (!Number.isFinite(n)) continue;
+      weights[tag] = weights[tag] !== undefined ? weights[tag] * 0.6 + n * 0.4 : n;
+    }
+  }
+
   return weights;
 }
 

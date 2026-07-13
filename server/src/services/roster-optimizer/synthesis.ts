@@ -10,6 +10,13 @@ import {
   type PlayerIntelDossier,
 } from './playerIntel.js';
 
+import {
+  citeAgent,
+  citeLeague,
+  normalizeRationaleLines,
+  type RationaleLine,
+} from './citations.js';
+
 export interface SynthesisContext {
   team: ITeam;
   assessment: TeamAssessment;
@@ -23,21 +30,21 @@ export interface SynthesisContext {
 interface LlmDropDecision {
   selectedPlayerIds: string[];
   confidence: number;
-  rationale: string[];
-  comparedAlternatives?: string;
+  rationale: Array<string | RationaleLine>;
+  comparedAlternatives?: string | RationaleLine;
 }
 
 interface LlmSwapDecision {
   dropPlayerId: string;
   addPlayerId: string;
   confidence: number;
-  rationale: string[];
+  rationale: Array<string | RationaleLine>;
 }
 
 interface LlmLineupDecision {
   recommendationIndex: number;
   confidence: number;
-  rationale: string[];
+  rationale: Array<string | RationaleLine>;
 }
 
 function parseJson<T>(raw: string): T {
@@ -78,15 +85,42 @@ function formatCandidates(candidates: PlayerCandidateFacts[]): string {
   );
 }
 
-const SYSTEM_PROMPT = `You are a fantasy football roster agent. You receive structured player research dossiers (stats, injury, news) and team context.
+const SYSTEM_PROMPT = `You are a fantasy football roster agent. You receive structured player research dossiers with citedFacts and newsFromMcpRss (RSS feeds via the sports-trends MCP).
 
 Rules:
 - Never recommend dropping a player who is in the starting lineup.
 - Strongly prefer dropping players with no NFL team (nflTeam null) or inactive status over active rostered players.
-- For lineup decisions, cite specific news headlines and injury designations when available.
-- Compare alternatives explicitly in your rationale.
-- Be concise but specific. Reference facts from the dossiers, not generic advice.
+- EVERY rationale line MUST include a citation copied from citedFacts.*.source or newsFromMcpRss[].citationLabel.
+- Prefer News / MCP citations when a matching headline exists; otherwise use Sleeper / league / rule engine sources from the dossiers.
+- Do not invent headlines, URLs, or sources not present in the input.
+- Compare alternatives explicitly.
 - Output valid JSON only.`;
+
+const RATIONALE_SCHEMA = `"rationale": [
+  {
+    "text": "claim about the player or roster",
+    "source": "exact citation from citedFacts.*.source OR newsFromMcpRss[].citationLabel (e.g. News / MCP · ESPN · “headline”)",
+    "url": "optional URL from newsFromMcpRss when citing news",
+    "sourceKind": "sleeper|news|league|rule_engine|performance|mcp|agent"
+  }
+]`;
+
+function buildCitedRationale(
+  decisionRationale: unknown,
+  comparedAlternatives: unknown,
+  complianceHeader: RationaleLine
+): RationaleLine[] {
+  const lines = [complianceHeader, ...normalizeRationaleLines(decisionRationale)];
+  if (comparedAlternatives) {
+    lines.push(...normalizeRationaleLines([comparedAlternatives], 'Agent · alternatives'));
+  }
+  // Ensure every line has a source
+  return lines.map((l) =>
+    l.source?.trim()
+      ? l
+      : citeAgent(l.text, 'synthesis (missing source)')
+  );
+}
 
 export async function synthesizeComplianceDrops(
   ctx: SynthesisContext,
@@ -116,11 +150,16 @@ Return JSON:
 {
   "selectedPlayerIds": ["id1", ...],
   "confidence": 0.0-1.0,
-  "rationale": ["paragraph 1", "paragraph 2", "paragraph 3"],
-  "comparedAlternatives": "one sentence on why not the others"
+  ${RATIONALE_SCHEMA},
+  "comparedAlternatives": {
+    "text": "why not the other equal cuts / active players",
+    "source": "Rule engine · availability tier OR News / MCP citation",
+    "sourceKind": "rule_engine"
+  }
 }
 
-Select exactly ${cutsNeeded} playerId(s) from the candidates. Prefer no-NFL-team players.`;
+Select exactly ${cutsNeeded} playerId(s) from the candidates. Prefer no-NFL-team players.
+Every rationale line MUST have a non-empty source field copied from the dossiers.`;
 
   try {
     const raw = await chatCompletion(
@@ -154,12 +193,15 @@ Select exactly ${cutsNeeded} playerId(s) from the candidates. Prefer no-NFL-team
       }
 
       const rationale =
-        i === 0 && decision.rationale.length > 0
-          ? [
-              `Roster over limit by ${compliance.overBy} (${compliance.countable}/${compliance.maxSize})`,
-              ...decision.rationale,
-              ...(decision.comparedAlternatives ? [decision.comparedAlternatives] : []),
-            ]
+        i === 0 && (decision.rationale?.length ?? 0) > 0
+          ? buildCitedRationale(
+              decision.rationale,
+              decision.comparedAlternatives,
+              citeLeague(
+                `Roster over limit by ${compliance.overBy} (${compliance.countable}/${compliance.maxSize})`,
+                `countable=${compliance.countable}, max=${compliance.maxSize}`
+              )
+            )
           : draft.rationale;
 
       enhancedDrops.push({
@@ -232,10 +274,11 @@ Return JSON:
   "dropPlayerId": "...",
   "addPlayerId": "...",
   "confidence": 0.0-1.0,
-  "rationale": ["why drop X", "why add Y", "overall roster impact"]
+  ${RATIONALE_SCHEMA}
 }
 
-Pick one drop and one add. Do not drop players with nflTeam unless depth is extreme.`;
+Pick one drop and one add. Do not drop players with nflTeam unless depth is extreme.
+Every rationale line MUST cite a dossier source (News / MCP, Sleeper, or performance).`;
 
   try {
     const raw = await chatCompletion(
@@ -266,7 +309,7 @@ Pick one drop and one add. Do not drop players with nflTeam unless depth is extr
         reasonTags: [...add.tags, 'agent_selected'],
       },
       confidence: Math.min(0.95, decision.confidence),
-      rationale: decision.rationale,
+      rationale: normalizeRationaleLines(decision.rationale),
       newsSnippets: draftRec.newsSnippets,
     };
   } catch {
@@ -321,16 +364,13 @@ Return JSON:
     {
       "recommendationIndex": 0,
       "confidence": 0.0-1.0,
-      "rationale": [
-        "paragraph citing injury status and recent news",
-        "paragraph comparing bench alternative stats",
-        "clear sit or start recommendation"
-      ]
+      ${RATIONALE_SCHEMA}
     }
   ]
 }
 
-Cite specific news headlines when available. For questionable players, explain the risk of starting vs the bench option's upside.`;
+Every rationale line MUST cite injuryStatus (Sleeper roster sync), performance, or News / MCP headlines from the dossiers.
+For questionable players, explain start vs sit risk with citations.`;
 
   try {
     const raw = await chatCompletion(
@@ -356,10 +396,11 @@ Cite specific news headlines when available. For questionable players, explain t
         rec.lineupAction?.movePlayer?.playerId,
       ].filter(Boolean) as string[];
 
+      const cited = normalizeRationaleLines(item.rationale);
       enhanced[globalIdx] = {
         ...rec,
         confidence: item.confidence ?? rec.confidence,
-        rationale: item.rationale.length > 0 ? item.rationale : rec.rationale,
+        rationale: cited.length > 0 ? cited : rec.rationale,
         newsSnippets: ctx.playerIntel
           ? intelNewsSnippets(ctx.playerIntel, ids)
           : rec.newsSnippets,

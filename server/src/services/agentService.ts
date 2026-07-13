@@ -130,7 +130,10 @@ export async function runAgentForTeam(
     });
     const suggestions = agentResult.recommendations;
 
-    agentRun.agentTrace = agentResult.agentTrace;
+    agentRun.agentTrace = [
+      `News / MCP feed: ${leagueNews.length} headline(s) in reasoning window`,
+      ...agentResult.agentTrace,
+    ];
     agentRun.primaryGoal = agentResult.assessment.primaryGoal;
     agentRun.llmUsed = agentResult.llmUsed;
 
@@ -206,7 +209,7 @@ export async function storeRecommendations(
     dropPlayer?: { playerId: string; name: string; position: string; reasonTags?: string[] };
     addPlayer?: { playerId: string; name: string; position: string; reasonTags?: string[] };
     confidence: number;
-    rationale: string[];
+    rationale: Array<string | { text: string; source: string; url?: string; sourceKind?: string }>;
     newsSnippets: Array<{ headline: string; source: string; url?: string; publishedAt?: Date }>;
   }>
 ) {
