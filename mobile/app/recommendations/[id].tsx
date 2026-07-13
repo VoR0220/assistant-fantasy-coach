@@ -17,41 +17,118 @@ function kindTitle(kind?: Recommendation['kind']): string {
       return 'Injury Sit / Start';
     case 'lineup_flex_move':
       return 'Flex Reposition';
+    case 'roster_drop':
+      return 'Roster Cut';
+    case 'move_to_taxi':
+      return 'Move to Taxi';
     default:
       return 'Waiver Swap';
   }
+}
+
+function approveLabel(kind?: Recommendation['kind'], dropName?: string): string {
+  switch (kind) {
+    case 'roster_drop':
+      return dropName ? `Drop ${dropName}` : 'Drop Player';
+    case 'move_to_taxi':
+      return 'Move to Taxi';
+    case 'lineup_sit_start':
+    case 'lineup_flex_move':
+      return 'Apply Lineup Change';
+    default:
+      return 'Approve Swap';
+  }
+}
+
+type DropChoice = NonNullable<Recommendation['dropPlayer']>;
+
+function DropChoiceRadio({
+  choices,
+  selectedId,
+  onSelect,
+  disabled,
+}: {
+  choices: DropChoice[];
+  selectedId: string;
+  onSelect: (id: string) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <View style={styles.radioGroup}>
+      <Text style={styles.label}>CHOOSE WHO TO DROP</Text>
+      <Text style={styles.radioHint}>These cuts are equally good for roster compliance</Text>
+      {choices.map((choice) => {
+        const selected = choice.playerId === selectedId;
+        return (
+          <Pressable
+            key={choice.playerId}
+            style={[styles.radioRow, selected && styles.radioRowSelected]}
+            onPress={() => !disabled && onSelect(choice.playerId)}
+            disabled={disabled}
+            accessibilityRole="radio"
+            accessibilityState={{ selected }}
+          >
+            <View style={[styles.radioOuter, selected && styles.radioOuterSelected]}>
+              {selected ? <View style={styles.radioInner} /> : null}
+            </View>
+            <View style={styles.radioCopy}>
+              <Text style={[styles.player, styles.sit, { fontSize: 17 }]}>{choice.name}</Text>
+              <Text style={styles.meta}>
+                {choice.position}
+                {choice.reasonTags?.includes('no_nfl_team') ? ' · no NFL team' : ''}
+                {choice.reasonTags?.includes('inactive') ? ' · inactive' : ''}
+              </Text>
+            </View>
+          </Pressable>
+        );
+      })}
+    </View>
+  );
 }
 
 export default function RecommendationDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [rec, setRec] = useState<Recommendation | null>(null);
   const [busy, setBusy] = useState(false);
+  const [selectedDropId, setSelectedDropId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!id) return;
-    api.getRecommendations().then(({ recommendations }) => {
-      const found = recommendations.find((r) => r._id === id);
-      if (found) setRec(found);
-    });
+    api.getRecommendation(id).then(({ recommendation }) => {
+      setRec(recommendation);
+      setSelectedDropId(recommendation.dropPlayer?.playerId ?? null);
+    }).catch(console.error);
   }, [id]);
+
+  const dropChoices: DropChoice[] =
+    rec?.dropAlternatives && rec.dropAlternatives.length > 1
+      ? rec.dropAlternatives
+      : rec?.dropPlayer
+        ? [rec.dropPlayer]
+        : [];
+
+  const selectedDrop =
+    dropChoices.find((c) => c.playerId === selectedDropId) ?? rec?.dropPlayer ?? null;
 
   async function approve() {
     if (!id) return;
     setBusy(true);
     try {
-      const result = (await api.approveRecommendation(id)) as {
+      const result = (await api.approveRecommendation(id, {
+        selectedDropPlayerId: selectedDrop?.playerId,
+      })) as {
         recommendation: Recommendation;
         executionResult?: { success: boolean; message: string; deepLink?: string };
       };
       setRec(result.recommendation);
       const exec = result.executionResult;
       if (exec?.deepLink) {
-        Alert.alert('Approved', exec.message, [
-          { text: 'Open Platform', onPress: () => Linking.openURL(exec.deepLink!) },
+        Alert.alert(exec.success ? 'Success' : 'Action needed', exec.message, [
+          { text: 'Open Sleeper', onPress: () => Linking.openURL(exec.deepLink!) },
           { text: 'OK' },
         ]);
       } else {
-        Alert.alert('Approved', exec?.message ?? 'Done.');
+        Alert.alert(exec?.success ? 'Success' : 'Done', exec?.message ?? 'Done.');
       }
       router.back();
     } catch (err) {
@@ -76,12 +153,45 @@ export default function RecommendationDetailScreen() {
 
   if (!rec) return <View style={styles.container} />;
 
-  const isLineup = rec.kind === 'lineup_sit_start' || rec.kind === 'lineup_flex_move';
+  const hasEqualDrops = Boolean(rec.dropAlternatives && rec.dropAlternatives.length > 1);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 16 }}>
       <Text style={styles.kind}>{kindTitle(rec.kind)}</Text>
       <Text style={styles.week}>Week {rec.week}</Text>
+
+      {rec.kind === 'roster_drop' && hasEqualDrops && (
+        <View style={styles.swapBox}>
+          <DropChoiceRadio
+            choices={dropChoices}
+            selectedId={selectedDrop?.playerId ?? dropChoices[0]?.playerId}
+            onSelect={setSelectedDropId}
+            disabled={rec.status !== 'pending'}
+          />
+        </View>
+      )}
+
+      {rec.kind === 'roster_drop' && !hasEqualDrops && rec.dropPlayer && (
+        <View style={styles.swapBox}>
+          <Text style={styles.label}>DROP FROM ROSTER</Text>
+          <Text style={[styles.player, styles.sit]}>{rec.dropPlayer.name}</Text>
+          <Text style={styles.meta}>{rec.dropPlayer.position}</Text>
+          {rec.dropPlayer.reasonTags?.length ? (
+            <Text style={styles.tags}>{rec.dropPlayer.reasonTags.join(' · ')}</Text>
+          ) : null}
+        </View>
+      )}
+
+      {rec.kind === 'move_to_taxi' && rec.lineupAction?.movePlayer && (
+        <View style={styles.swapBox}>
+          <Text style={styles.label}>MOVE TO TAXI SQUAD</Text>
+          <Text style={styles.player}>{rec.lineupAction.movePlayer.name}</Text>
+          <Text style={styles.meta}>
+            {rec.lineupAction.fromSlot ?? 'BN'} → TAXI
+          </Text>
+          <Text style={styles.tags}>Taxi players do not count against your roster limit</Text>
+        </View>
+      )}
 
       {rec.kind === 'lineup_flex_move' && rec.lineupAction?.movePlayer && (
         <View style={styles.swapBox}>
@@ -117,9 +227,20 @@ export default function RecommendationDetailScreen() {
 
       {(!rec.kind || rec.kind === 'add_drop') && rec.dropPlayer && rec.addPlayer && (
         <View style={styles.swapBox}>
-          <Text style={styles.label}>DROP</Text>
-          <Text style={styles.player}>{rec.dropPlayer.name}</Text>
-          <Text style={styles.meta}>{rec.dropPlayer.position}</Text>
+          {hasEqualDrops ? (
+            <DropChoiceRadio
+              choices={dropChoices}
+              selectedId={selectedDrop?.playerId ?? dropChoices[0]?.playerId}
+              onSelect={setSelectedDropId}
+              disabled={rec.status !== 'pending'}
+            />
+          ) : (
+            <>
+              <Text style={styles.label}>DROP</Text>
+              <Text style={styles.player}>{rec.dropPlayer.name}</Text>
+              <Text style={styles.meta}>{rec.dropPlayer.position}</Text>
+            </>
+          )}
           <Text style={[styles.label, { marginTop: 16 }]}>ADD</Text>
           <Text style={styles.player}>{rec.addPlayer.name}</Text>
           <Text style={styles.meta}>{rec.addPlayer.position}</Text>
@@ -146,7 +267,9 @@ export default function RecommendationDetailScreen() {
       {rec.status === 'pending' && (
         <View style={styles.actions}>
           <Pressable style={styles.approveBtn} onPress={approve} disabled={busy}>
-            <Text style={styles.btnText}>{isLineup ? 'Got It — Will Fix Lineup' : 'Approve Swap'}</Text>
+            <Text style={styles.btnText}>
+              {approveLabel(rec.kind, selectedDrop?.name)}
+            </Text>
           </Pressable>
           <Pressable style={styles.dismissBtn} onPress={dismiss} disabled={busy}>
             <Text style={styles.dismissText}>Dismiss</Text>
@@ -183,4 +306,38 @@ const styles = StyleSheet.create({
   btnText: { color: '#fff', fontWeight: '700' },
   dismissBtn: { padding: 16, alignItems: 'center' },
   dismissText: { color: '#c0392b', fontWeight: '600' },
+  radioGroup: { gap: 10 },
+  radioHint: { fontSize: 13, color: '#666', marginTop: 4, marginBottom: 4 },
+  radioRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e5e5e5',
+    backgroundColor: '#fafafa',
+  },
+  radioRowSelected: {
+    borderColor: '#1a472a',
+    backgroundColor: '#f0f7f3',
+  },
+  radioOuter: {
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    borderWidth: 2,
+    borderColor: '#aaa',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  radioOuterSelected: { borderColor: '#1a472a' },
+  radioInner: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    backgroundColor: '#1a472a',
+  },
+  radioCopy: { flex: 1 },
 });

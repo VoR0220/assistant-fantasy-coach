@@ -1,5 +1,5 @@
-import * as SecureStore from 'expo-secure-store';
 import React, { createContext, useContext, useEffect, useState } from 'react';
+import { deleteAuthToken, getAuthToken, setAuthToken } from './storage';
 import { api } from './api';
 
 interface AuthContextValue {
@@ -17,26 +17,28 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    SecureStore.getItemAsync('auth_token').then((t) => {
-      setToken(t);
-      setLoading(false);
-    });
+    getAuthToken()
+      .then((t) => {
+        setToken(t);
+        setLoading(false);
+      })
+      .catch(() => setLoading(false));
   }, []);
 
   async function signIn(email: string, password: string) {
     const { token: t } = await api.login(email, password);
-    await SecureStore.setItemAsync('auth_token', t);
+    await setAuthToken(t);
     setToken(t);
   }
 
   async function signUp(email: string, password: string) {
     const { token: t } = await api.register(email, password);
-    await SecureStore.setItemAsync('auth_token', t);
+    await setAuthToken(t);
     setToken(t);
   }
 
   async function signOut() {
-    await SecureStore.deleteItemAsync('auth_token');
+    await deleteAuthToken();
     setToken(null);
   }
 

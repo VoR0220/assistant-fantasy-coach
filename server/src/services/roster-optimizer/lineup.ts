@@ -5,6 +5,7 @@ import type {
   PlayerWeekStats,
   SwapRecommendationInput,
 } from '../../types/index.js';
+import { isInactivePlayer, isWithoutNflTeam } from './playerAvailability.js';
 
 const MUST_SIT = new Set(['OUT', 'IR', 'PUP', 'SUSP', 'DOUBTFUL']);
 const QUESTIONABLE = new Set(['QUESTIONABLE', 'Q', 'GTD']);
@@ -34,6 +35,11 @@ function isInjured(status?: string, mustSitOnly = false): boolean {
 
 function isHealthy(status?: string): boolean {
   return !status || (!MUST_SIT.has(status.toUpperCase()) && !QUESTIONABLE.has(status.toUpperCase()));
+}
+
+function isViableBenchPlayer(p: PlayerEntry): boolean {
+  if (isWithoutNflTeam(p) || isInactivePlayer(p)) return false;
+  return isHealthy(p.injuryStatus);
 }
 
 function playerRef(p: PlayerEntry, tags?: string[]) {
@@ -100,7 +106,7 @@ export function generateInjuryLineupRecommendations(
 
     const targetSlot = normalizeSlot(injured.lineupSlot ?? injured.position);
     const benchCandidates = team.roster.bench
-      .filter((b) => isHealthy(b.injuryStatus) && !usedBench.has(b.playerId))
+      .filter((b) => isViableBenchPlayer(b) && !usedBench.has(b.playerId))
       .filter((b) => canFillSlot(b, targetSlot))
       .sort((a, b) => benchScore(b, perfMap) - benchScore(a, perfMap));
 
@@ -217,7 +223,7 @@ export function generateFlexRepositionRecommendations(
 
     const flexSub = team.roster.bench.find(
       (b) =>
-        isHealthy(b.injuryStatus) &&
+        isViableBenchPlayer(b) &&
         FLEX_ELIGIBLE.has(b.position) &&
         !canFillSlot(b, injured.position)
     );

@@ -1,12 +1,12 @@
 import Constants from 'expo-constants';
-import * as SecureStore from 'expo-secure-store';
+import { getAuthToken } from './storage';
 
 const API_URL =
   (Constants.expoConfig?.extra as { apiUrl?: string })?.apiUrl ??
   'http://localhost:5000';
 
 async function getToken(): Promise<string | null> {
-  return SecureStore.getItemAsync('auth_token');
+  return getAuthToken();
 }
 
 async function request<T>(
@@ -21,9 +21,28 @@ async function request<T>(
   if (token) headers.Authorization = `Bearer ${token}`;
 
   const res = await fetch(`${API_URL}${path}`, { ...options, headers });
-  const data = await res.json();
-  if (!res.ok) throw new Error(data.error ?? `Request failed: ${res.status}`);
+  let data: unknown;
+  try {
+    data = await res.json();
+  } catch {
+    throw new Error(`Request failed: ${res.status}`);
+  }
+  if (!res.ok) {
+    throw new Error(formatApiError(data, res.status));
+  }
   return data as T;
+}
+
+function formatApiError(data: unknown, status: number): string {
+  if (data && typeof data === 'object') {
+    const payload = data as { error?: string; errors?: Array<{ msg?: string; path?: string }> };
+    if (payload.error) return payload.error;
+    const first = payload.errors?.[0];
+    if (first?.path === 'password') return 'Password must be at least 6 characters.';
+    if (first?.path === 'email') return 'Enter a valid email address.';
+    if (first?.msg) return first.msg;
+  }
+  return `Request failed (${status})`;
 }
 
 export const api = {
@@ -43,15 +62,15 @@ export const api = {
       body: JSON.stringify({ token, platform }),
     }),
   getTeams: () => request<{ teams: Team[] }>('/api/teams'),
-  getTeam: (id: string) => request<{ team: Team }>(`/api/teams/${id}`),
-  discoverLeagues: (platform: Platform, credentials: PlatformCredentials, sport: Sport = 'nfl') =>
+  getTeam: (id: string) => request<{ team: Team; compliance?: RosterCompliance }>(`/api/teams/${id}`),
+  discoverLeagues: (platform: Platform, credentials?: PlatformCredentials, sport: Sport = 'nfl') =>
     request<{ leagues: LeagueSummary[] }>('/api/teams/discover', {
       method: 'POST',
       body: JSON.stringify({ platform, credentials, sport }),
     }),
   importTeams: (
     platform: Platform,
-    credentials: PlatformCredentials,
+    credentials?: PlatformCredentials,
     sport: Sport = 'nfl',
     selectedLeagues?: Array<{ externalLeagueId: string; externalTeamId: string }>
   ) =>
@@ -59,8 +78,18 @@ export const api = {
       method: 'POST',
       body: JSON.stringify({ platform, credentials, sport, selectedLeagues }),
     }),
+  getConnections: () =>
+    request<{ connections: Array<{ platform: Platform; externalUserId: string; connectedAt: string }> }>(
+      '/api/connections'
+    ),
+  getYahooOAuthUrl: () => request<{ url: string }>('/api/connections/yahoo/oauth/url'),
   syncTeam: (id: string) =>
-    request<{ team: Team }>(`/api/teams/${id}/sync`, { method: 'POST' }),
+    request<{ team: Team; compliance?: RosterCompliance }>(`/api/teams/${id}/sync`, { method: 'POST' }),
+  runAgent: (id: string) =>
+    request<{ teamId: string; recommendationIds: string[]; skipped: boolean; compliance?: RosterCompliance }>(
+      `/api/teams/${id}/run-agent`,
+      { method: 'POST' }
+    ),
   setOptIn: (id: string, agentOptIn: boolean) =>
     request<{ team: Team }>(`/api/teams/${id}/opt-in`, {
       method: 'PATCH',
@@ -81,19 +110,27 @@ export const api = {
       `/api/recommendations${qs ? `?${qs}` : ''}`
     );
   },
+  getRecommendation: (id: string) =>
+    request<{ recommendation: Recommendation }>(`/api/recommendations/${id}`),
   saveConnection: (platform: Platform, credentials: PlatformCredentials) =>
     request(`/api/connections/${platform}`, {
       method: 'POST',
       body: JSON.stringify({ credentials }),
     }),
-  approveRecommendation: (id: string) =>
-    request(`/api/recommendations/${id}/approve`, { method: 'POST' }),
+  approveRecommendation: (id: string, body?: { selectedDropPlayerId?: string }) =>
+    request(`/api/recommendations/${id}/approve`, {
+      method: 'POST',
+      body: JSON.stringify(body ?? {}),
+    }),
   dismissRecommendation: (id: string) =>
     request(`/api/recommendations/${id}/dismiss`, { method: 'POST' }),
   analyzeLineup: (teamId: string) =>
-    request<{ recommendations: Recommendation[] }>(`/api/lineup/${teamId}/analyze-lineup`, {
-      method: 'POST',
-    }),
+    request<{
+      recommendations: Recommendation[];
+      recommendationIds: string[];
+      team?: Team;
+      compliance?: RosterCompliance;
+    }>(`/api/lineup/${teamId}/analyze-lineup`, { method: 'POST' }),
 };
 
 export type Platform = 'sleeper' | 'espn' | 'yahoo';
@@ -109,6 +146,10 @@ export const SPORT_LABELS: Record<Sport, string> = {
 
 export interface PlatformCredentials {
   username?: string;
+  email?: string;
+  password?: string;
+  userId?: string;
+  sleeperToken?: string;
   leagueId?: string;
   espnS2?: string;
   swid?: string;
@@ -124,6 +165,14 @@ export interface LeagueSummary {
   sport: Sport;
 }
 
+export interface RosterCompliance {
+  countable: number;
+  maxSize: number;
+  overBy: number;
+  taxiCount: number;
+  taxiSlots: number;
+}
+
 export interface Team {
   _id: string;
   platform: Platform;
@@ -133,19 +182,22 @@ export interface Team {
   agentOptIn: boolean;
   autoPilot?: boolean;
   roster?: {
-    starters: Array<{ playerId: string; name: string; position: string }>;
-    bench: Array<{ playerId: string; name: string; position: string }>;
+    starters: Array<{ playerId: string; name: string; position: string; injuryStatus?: string }>;
+    bench: Array<{ playerId: string; name: string; position: string; injuryStatus?: string }>;
+    taxi?: Array<{ playerId: string; name: string; position: string; yearsExp?: number }>;
   };
 }
 
 export interface Recommendation {
   _id: string;
-  kind?: 'add_drop' | 'lineup_sit_start' | 'lineup_flex_move';
+  kind?: 'add_drop' | 'lineup_sit_start' | 'lineup_flex_move' | 'roster_drop' | 'move_to_taxi';
   week: number;
   confidence: number;
   rationale: string[];
   status: string;
   dropPlayer?: { playerId: string; name: string; position: string; reasonTags?: string[] };
+  /** Equal drop choices — pick one via radio before approving */
+  dropAlternatives?: Array<{ playerId: string; name: string; position: string; reasonTags?: string[] }>;
   addPlayer?: { playerId: string; name: string; position: string; reasonTags?: string[] };
   lineupAction?: {
     sitPlayer?: { playerId: string; name: string; position: string };

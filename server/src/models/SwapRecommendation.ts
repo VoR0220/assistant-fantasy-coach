@@ -10,6 +10,8 @@ export interface ISwapRecommendation extends Document {
   week: number;
   kind: RecommendationKind;
   dropPlayer?: SwapPlayerRef;
+  /** Equal drop choices for radio selection (includes dropPlayer when set) */
+  dropAlternatives?: SwapPlayerRef[];
   addPlayer?: SwapPlayerRef;
   lineupAction?: LineupActionInput;
   confidence: number;
@@ -61,10 +63,11 @@ const swapRecommendationSchema = new Schema<ISwapRecommendation>(
     week: { type: Number, required: true },
     kind: {
       type: String,
-      enum: ['add_drop', 'lineup_sit_start', 'lineup_flex_move'],
+      enum: ['add_drop', 'lineup_sit_start', 'lineup_flex_move', 'roster_drop', 'move_to_taxi'],
       default: 'add_drop',
     },
     dropPlayer: swapPlayerSchema,
+    dropAlternatives: [swapPlayerSchema],
     addPlayer: swapPlayerSchema,
     lineupAction: lineupActionSchema,
     confidence: { type: Number, required: true, min: 0, max: 1 },

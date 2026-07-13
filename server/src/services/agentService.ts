@@ -5,9 +5,9 @@ import { User, getDecryptedCredentials } from '../models/User.js';
 import { getAdapter } from './fantasy-platform/index.js';
 import { getSleeperTrending, getSleeperPlayersMap } from './fantasy-platform/sleeper.js';
 import {
-  generateWeeklyRecommendations,
   getCurrentWeek,
 } from './roster-optimizer/index.js';
+import { runRosterAgent } from './roster-optimizer/agent.js';
 import { notifyWeeklyRecommendations } from './pushService.js';
 import { getTagWeightsForTeam } from './feedbackService.js';
 import { getRecentLeagueNews } from './newsService.js';
@@ -58,12 +58,21 @@ export interface AgentRunOptions {
   leagueNews?: NewsSnippet[];
   /** Re-run even if a completed run exists for this (team, week) */
   force?: boolean;
+  /** Skip LLM synthesis even when OPENAI_API_KEY is set */
+  synthesize?: boolean;
 }
 
 export async function runAgentForTeam(
   teamId: string,
   options: AgentRunOptions = {}
-): Promise<{ teamId: string; recommendationIds: string[]; skipped: boolean }> {
+): Promise<{
+  teamId: string;
+  recommendationIds: string[];
+  skipped: boolean;
+  assessment?: import('./roster-optimizer/planner.js').TeamAssessment;
+  agentTrace?: string[];
+  llmUsed?: boolean;
+}> {
   const team = await Team.findById(teamId);
   if (!team) throw new Error('Team not found');
 
@@ -78,6 +87,9 @@ export async function runAgentForTeam(
     agentRun = await AgentRun.create({ teamId, week, status: 'running', recommendationIds: [] });
   } else {
     agentRun.status = 'running';
+    agentRun.agentTrace = [];
+    agentRun.primaryGoal = undefined;
+    agentRun.llmUsed = false;
     await agentRun.save();
   }
 
@@ -106,7 +118,7 @@ export async function runAgentForTeam(
         : await getRecentLeagueNews(synced.sport, 72);
     const tagWeights = await getTagWeightsForTeam(String(synced._id));
 
-    const suggestions = generateWeeklyRecommendations({
+    const agentResult = await runRosterAgent({
       team: synced,
       performance,
       trendingAdds,
@@ -114,7 +126,13 @@ export async function runAgentForTeam(
       leagueNews,
       tagWeights,
       week,
+      synthesize: options.synthesize,
     });
+    const suggestions = agentResult.recommendations;
+
+    agentRun.agentTrace = agentResult.agentTrace;
+    agentRun.primaryGoal = agentResult.assessment.primaryGoal;
+    agentRun.llmUsed = agentResult.llmUsed;
 
     await SwapRecommendation.deleteMany({
       teamId: synced._id,
@@ -143,7 +161,14 @@ export async function runAgentForTeam(
       await notifyWeeklyRecommendations(user, synced.teamName, suggestions.length, week, String(synced._id));
     }
 
-    return { teamId, recommendationIds, skipped: false };
+    return {
+      teamId,
+      recommendationIds,
+      skipped: false,
+      assessment: agentResult.assessment,
+      agentTrace: agentResult.agentTrace,
+      llmUsed: agentResult.llmUsed,
+    };
   } catch (err) {
     agentRun.status = 'failed';
     agentRun.errorMessage = (err as Error).message;

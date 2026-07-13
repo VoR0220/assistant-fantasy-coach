@@ -7,11 +7,15 @@ import type {
   TrendingPlayer,
   PlayerWeekStats,
   NewsSnippet,
+  PlayerEntry,
 } from '../../types/index.js';
 import { SPORT_CONFIG } from '../../types/index.js';
 import { newsRecencyMultiplier } from '../newsService.js';
 
-import { generateAllLineupRecommendations } from './lineup.js';
+import { generateAllLineupRecommendations, generateInjuryLineupRecommendations } from './lineup.js';
+import { generateRosterComplianceRecommendations } from './compliance.js';
+import { assessTeam, maxRecommendationsForGoal } from './planner.js';
+import { scorePlayerAvailability } from './playerAvailability.js';
 
 const INJURY_DROP = new Set(['OUT', 'IR', 'PUP', 'SUSP', 'DOUBTFUL']);
 
@@ -99,8 +103,20 @@ function scoreDropCandidate(
   player: PlayerWeekStats,
   baselines: Record<string, number>,
   trendingDrops: TrendingPlayer[],
-  injuryStatus?: string
-): { score: number; tags: string[] } {
+  injuryStatus?: string,
+  rosterEntry?: PlayerEntry
+): { score: number; tags: string[]; summary: string } {
+  if (rosterEntry) {
+    const availability = scorePlayerAvailability(rosterEntry);
+    if (availability.score > 0) {
+      return {
+        score: availability.score,
+        tags: availability.tags,
+        summary: availability.summary,
+      };
+    }
+  }
+
   const tags: string[] = [];
   let score = 0;
   const baseline = baselines[player.position] ?? 5;
@@ -122,7 +138,11 @@ function scoreDropCandidate(
     tags.push('no_production');
   }
 
-  return { score, tags };
+  return {
+    score,
+    tags,
+    summary: tags.length > 0 ? tags.join(', ').replace(/_/g, ' ') : '',
+  };
 }
 
 function scoreAddCandidate(
@@ -179,18 +199,25 @@ export function generateSwapRecommendations(input: OptimizerInput): SwapRecommen
   const neededPositions = findNeededPositions(team);
   const freeAgents = team.freeAgentsCache?.players ?? [];
 
-  const allRoster = [...team.roster.starters, ...team.roster.bench, ...(team.roster.ir ?? [])];
+  const allRoster = [
+    ...team.roster.starters,
+    ...team.roster.bench,
+    ...(team.roster.ir ?? []),
+    ...(team.roster.taxi ?? []),
+  ];
   const injuryMap = Object.fromEntries(
     allRoster.map((p) => [p.playerId, p.injuryStatus])
   );
+  const rosterMap = Object.fromEntries(allRoster.map((p) => [p.playerId, p]));
 
   const dropCandidates = performance
     .map((p) => {
-      const { score, tags } = scoreDropCandidate(
+      const { score, tags, summary } = scoreDropCandidate(
         p,
         baselines,
         trendingDrops,
-        injuryMap[p.playerId]
+        injuryMap[p.playerId],
+        rosterMap[p.playerId]
       );
       const news = matchNewsToPlayer(p.name, leagueNews);
       let finalScore = score;
@@ -198,7 +225,7 @@ export function generateSwapRecommendations(input: OptimizerInput): SwapRecommen
         finalScore += 0.25;
         tags.push('negative_news');
       }
-      return { player: p, score: finalScore, tags, newsSnippets: news.snippets };
+      return { player: p, score: finalScore, tags, summary, newsSnippets: news.snippets };
     })
     .filter((d) => d.score > 0.3)
     .map((d) => ({
@@ -265,7 +292,7 @@ export function generateSwapRecommendations(input: OptimizerInput): SwapRecommen
       },
       confidence,
       rationale: [
-        `Drop ${drop.player.name} (${drop.tags.join(', ') || 'underperforming'})`,
+        `Drop ${drop.player.name} — ${drop.summary || drop.tags.join(', ') || 'underperforming'}`,
         `Add ${add.player.name} (${add.tags.join(', ') || 'waiver target'})`,
         ...dropNews.slice(0, 1).map((n) => `News: ${n.headline} (${n.source})`),
         ...addNews.slice(0, 1).map((n) => `News: ${n.headline} (${n.source})`),
@@ -284,14 +311,49 @@ export function generateSwapRecommendations(input: OptimizerInput): SwapRecommen
 export { generateAllLineupRecommendations, generateInjuryLineupRecommendations, generateFlexRepositionRecommendations } from './lineup.js';
 
 export function generateWeeklyRecommendations(input: OptimizerInput): SwapRecommendationInput[] {
-  const lineup = generateAllLineupRecommendations({
-    team: input.team,
-    performance: input.performance,
-    maxRecommendations: 5,
-  });
-  const swaps = generateSwapRecommendations({ ...input, maxRecommendations: 3 });
-  return [...lineup, ...swaps];
+  const assessment = assessTeam(input.team, input.performance);
+  const recommendations: SwapRecommendationInput[] = [];
+
+  for (const goal of assessment.goals) {
+    const max = maxRecommendationsForGoal(goal);
+    switch (goal) {
+      case 'roster_compliance':
+        recommendations.push(
+          ...generateRosterComplianceRecommendations({
+            team: input.team,
+            performance: input.performance,
+            maxRecommendations: max,
+          })
+        );
+        break;
+      case 'lineup_injury':
+        recommendations.push(
+          ...generateInjuryLineupRecommendations({
+            team: input.team,
+            performance: input.performance,
+            maxRecommendations: max,
+          })
+        );
+        break;
+      case 'lineup_flex':
+        recommendations.push(
+          ...generateAllLineupRecommendations({
+            team: input.team,
+            performance: input.performance,
+            maxRecommendations: max,
+          }).filter((r) => r.kind === 'lineup_flex_move')
+        );
+        break;
+      case 'waiver_upgrades':
+        recommendations.push(...generateSwapRecommendations({ ...input, maxRecommendations: max }));
+        break;
+    }
+  }
+
+  return recommendations;
 }
+
+export { generateRosterComplianceRecommendations, getRosterComplianceSummary } from './compliance.js';
 
 export function getCurrentWeek(sport: Sport = 'nfl'): number {
   const cfg = SPORT_CONFIG[sport];

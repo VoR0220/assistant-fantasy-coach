@@ -22,12 +22,36 @@ function kindLabel(kind?: Recommendation['kind']): string {
       return 'Sit / Start';
     case 'lineup_flex_move':
       return 'Flex Move';
+    case 'roster_drop':
+      return 'Roster Cut';
+    case 'move_to_taxi':
+      return 'Move to Taxi';
     default:
       return 'Add / Drop';
   }
 }
 
 function summaryText(item: Recommendation): { primary: string; secondary?: string } {
+  if (item.kind === 'roster_drop') {
+    const alts = item.dropAlternatives;
+    if (alts && alts.length > 1) {
+      return {
+        primary: `Drop one of ${alts.length} equal options`,
+        secondary: alts.map((a) => a.name).join(' · '),
+      };
+    }
+    return {
+      primary: `Drop ${item.dropPlayer?.name ?? '?'}`,
+      secondary: item.dropPlayer?.position ? `${item.dropPlayer.position} · roster compliance` : undefined,
+    };
+  }
+  if (item.kind === 'move_to_taxi') {
+    const name = item.lineupAction?.movePlayer?.name ?? 'Player';
+    return {
+      primary: `Move ${name} to Taxi`,
+      secondary: 'Does not count against roster limit',
+    };
+  }
   if (item.kind === 'lineup_sit_start') {
     const sit = item.lineupAction?.sitPlayer?.name ?? 'Injured player';
     const start = item.lineupAction?.startPlayer?.name;
@@ -61,9 +85,15 @@ export default function RecommendationsScreen() {
         status: 'pending',
       });
       const sorted = [...recommendations].sort((a, b) => {
-        const kindOrder = { lineup_sit_start: 0, lineup_flex_move: 1, add_drop: 2 };
-        const aOrder = kindOrder[a.kind ?? 'add_drop'] ?? 2;
-        const bOrder = kindOrder[b.kind ?? 'add_drop'] ?? 2;
+        const kindOrder = {
+          roster_drop: 0,
+          move_to_taxi: 1,
+          lineup_sit_start: 2,
+          lineup_flex_move: 3,
+          add_drop: 4,
+        };
+        const aOrder = kindOrder[a.kind ?? 'add_drop'] ?? 4;
+        const bOrder = kindOrder[b.kind ?? 'add_drop'] ?? 4;
         if (aOrder !== bOrder) return aOrder - bOrder;
         return b.confidence - a.confidence;
       });
