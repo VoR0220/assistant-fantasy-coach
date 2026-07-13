@@ -41,6 +41,9 @@ const playerEntrySchema = new Schema(
     team: String,
     injuryStatus: String,
     lineupSlot: String,
+    yearsExp: Number,
+    playerStatus: String,
+    active: Boolean,
     fantasyPoints: {
       week: Number,
       season: Number,
@@ -68,11 +71,17 @@ const teamSchema = new Schema<ITeam>(
       rosterSlots: { type: Schema.Types.Mixed, default: {} },
       waiverType: { type: String, enum: ['faab', 'rolling', 'none'], default: 'rolling' },
       numTeams: { type: Number, default: 12 },
+      maxRosterSize: Number,
+      benchSlots: Number,
+      irSlots: Number,
+      taxiSlots: Number,
+      taxiYears: Number,
     },
     roster: {
       starters: [playerEntrySchema],
       bench: [playerEntrySchema],
       ir: [playerEntrySchema],
+      taxi: [playerEntrySchema],
     },
     freeAgentsCache: {
       players: [playerEntrySchema],

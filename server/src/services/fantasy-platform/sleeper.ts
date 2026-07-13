@@ -1,9 +1,99 @@
 const SLEEPER_BASE = 'https://api.sleeper.app/v1';
+/** Private GraphQL endpoint used by Sleeper's own web/mobile apps (unofficial). */
+const SLEEPER_GRAPHQL = 'https://sleeper.com/graphql';
 
 async function sleeperFetch<T>(path: string): Promise<T> {
   const res = await fetch(`${SLEEPER_BASE}${path}`);
   if (!res.ok) throw new Error(`Sleeper API error: ${res.status} ${path}`);
   return res.json() as Promise<T>;
+}
+
+interface SleeperGraphQLResponse<T> {
+  data?: T;
+  errors?: Array<{ message: string }>;
+}
+
+async function sleeperGraphQL<T>(
+  operationName: string,
+  query: string,
+  variables: Record<string, unknown>,
+  token?: string
+): Promise<T> {
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+    'X-Sleeper-GraphQL-Op': operationName,
+  };
+  // Sleeper uses the raw token string, no "Bearer" prefix.
+  if (token) headers.Authorization = token;
+
+  const res = await fetch(SLEEPER_GRAPHQL, {
+    method: 'POST',
+    headers,
+    body: JSON.stringify({ operationName, variables, query }),
+  });
+  const payload = (await res.json().catch(() => null)) as SleeperGraphQLResponse<T> | null;
+  if (!res.ok || !payload) {
+    throw new Error(`Sleeper GraphQL error: HTTP ${res.status}`);
+  }
+  if (payload.errors?.length) {
+    throw new Error(payload.errors[0].message);
+  }
+  if (!payload.data) throw new Error('Sleeper GraphQL returned no data');
+  return payload.data;
+}
+
+export interface SleeperLoginResult {
+  token: string;
+  userId: string;
+  displayName?: string;
+  email?: string;
+}
+
+/**
+ * Log in with Sleeper credentials via the private GraphQL `login_query`.
+ * Returns the auth token Sleeper's own apps use for writes (lineup changes etc).
+ * The password is forwarded to Sleeper only and never stored.
+ */
+export async function sleeperLogin(
+  identifier: string,
+  password: string
+): Promise<SleeperLoginResult> {
+  const query = `query login_query($email_or_phone_or_username: String!, $password: String, $captcha: String) {
+  login(email_or_phone_or_username: $email_or_phone_or_username, password: $password, captcha: $captcha) {
+    token
+    user_id
+    display_name
+    email
+  }
+}`;
+  try {
+    const data = await sleeperGraphQL<{
+      login: { token: string; user_id: string; display_name?: string; email?: string };
+    }>('login_query', query, {
+      email_or_phone_or_username: identifier,
+      password,
+      captcha: null,
+    });
+    if (!data.login?.token) throw new Error('Sleeper login did not return a token');
+    return {
+      token: data.login.token,
+      userId: data.login.user_id,
+      displayName: data.login.display_name,
+      email: data.login.email,
+    };
+  } catch (err) {
+    const msg = (err as Error).message;
+    if (/captcha/i.test(msg)) {
+      throw new Error(
+        'Sleeper is asking for a captcha. Sign in at sleeper.com once, then retry — or use username-only mode.'
+      );
+    }
+    if (/password|credential|invalid|unauthorized/i.test(msg)) {
+      throw new Error('Sleeper sign-in failed: check your email/username and password.');
+    }
+    throw new Error(`Sleeper sign-in failed: ${msg}`);
+  }
 }
 
 interface SleeperPlayer {
@@ -15,6 +105,9 @@ interface SleeperPlayer {
   team?: string | null;
   injury_status?: string | null;
   fantasy_positions?: string[];
+  years_exp?: number;
+  status?: string | null;
+  active?: boolean;
 }
 
 interface SleeperRoster {
@@ -23,6 +116,7 @@ interface SleeperRoster {
   players: string[];
   starters: string[];
   reserve?: string[];
+  taxi?: string[];
   settings?: { fpts?: number; fpts_against?: number };
 }
 
@@ -31,7 +125,12 @@ interface SleeperLeague {
   name: string;
   season: string;
   total_rosters: number;
-  settings?: { waiver_type?: number };
+  settings?: {
+    waiver_type?: number;
+    taxi_slots?: number;
+    taxi_years?: number;
+    taxi_deadline?: number;
+  };
   scoring_settings?: Record<string, number>;
   roster_positions?: string[];
 }
@@ -65,7 +164,22 @@ function resolvePlayer(id: string, map: Record<string, SleeperPlayer>): import('
     position: p?.position ?? p?.fantasy_positions?.[0] ?? 'UNKNOWN',
     team: p?.team ?? undefined,
     injuryStatus: p?.injury_status ?? undefined,
+    yearsExp: p?.years_exp,
+    playerStatus: p?.status ?? undefined,
+    active: p?.active,
   };
+}
+
+function buildRosterLimits(positions?: string[]): {
+  maxRosterSize: number;
+  benchSlots: number;
+  irSlots: number;
+} {
+  const rp = positions ?? [];
+  const benchSlots = rp.filter((p) => p === 'BN').length;
+  const irSlots = rp.filter((p) => p === 'IR').length;
+  const starterSlots = rp.filter((p) => p !== 'BN' && p !== 'IR').length;
+  return { maxRosterSize: starterSlots + benchSlots + irSlots, benchSlots, irSlots };
 }
 
 function inferScoring(settings?: Record<string, number>): 'ppr' | 'half_ppr' | 'standard' {
@@ -112,8 +226,52 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
   }
 
   async connect(credentials: PlatformCredentials): Promise<ConnectedAccount> {
+    // Path A: a token already captured by the in-app Sleeper login WebView.
+    // Trust it for writes; resolve the username from the public user endpoint.
+    const capturedToken = credentials.sleeperToken?.trim();
+    if (capturedToken) {
+      const userId = credentials.userId?.trim();
+      const user = userId
+        ? await sleeperFetch<SleeperUser>(`/user/${userId}`).catch(() => null)
+        : null;
+      if (!userId && !user) {
+        throw new Error('Sleeper token capture is missing a user id.');
+      }
+      return {
+        platform: 'sleeper',
+        externalUserId: user?.user_id ?? userId!,
+        credentials: {
+          username: user?.username,
+          userId: user?.user_id ?? userId,
+          sleeperToken: capturedToken,
+        },
+      };
+    }
+
+    // Path B: full sign-in with email/username + password, which yields the
+    // auth token Sleeper's own apps use for writes (lineup changes, etc).
+    const password = credentials.password?.trim();
+    const identifier = (credentials.username ?? credentials.email)?.trim();
+
+    if (password && identifier) {
+      const login = await sleeperLogin(identifier, password);
+      const user = await sleeperFetch<SleeperUser>(`/user/${login.userId}`);
+      return {
+        platform: 'sleeper',
+        externalUserId: login.userId,
+        credentials: {
+          username: user.username,
+          userId: login.userId,
+          // Token used by submitLineupChange; never expose the password again.
+          sleeperToken: login.token,
+        },
+      };
+    }
+
+    // Fallback: username-only (read-only). Writes will require the user to
+    // sign in with a password later to obtain a token.
     const username = credentials.username?.trim();
-    if (!username) throw new Error('Sleeper username is required');
+    if (!username) throw new Error('Sleeper username (or email + password) is required');
     const user = await sleeperFetch<SleeperUser>(`/user/${username}`);
     return {
       platform: 'sleeper',
@@ -168,12 +326,14 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
 
     const starterSet = new Set(roster.starters ?? []);
     const reserveSet = new Set(roster.reserve ?? []);
+    const taxiSet = new Set(roster.taxi ?? []);
     const allIds = roster.players ?? [];
     const rosterPositions = league.roster_positions ?? [];
 
     const starters: PlayerEntry[] = [];
     const bench: PlayerEntry[] = [];
     const ir: PlayerEntry[] = [];
+    const taxi: PlayerEntry[] = [];
 
     for (let i = 0; i < (roster.starters ?? []).length; i++) {
       const id = roster.starters![i];
@@ -183,8 +343,14 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
       starters.push(entry);
     }
 
+    for (const id of roster.taxi ?? []) {
+      const entry = resolvePlayer(id, playersMap);
+      entry.lineupSlot = 'TAXI';
+      taxi.push(entry);
+    }
+
     for (const id of allIds) {
-      if (starterSet.has(id) || reserveSet.has(id)) continue;
+      if (starterSet.has(id) || reserveSet.has(id) || taxiSet.has(id)) continue;
       bench.push(resolvePlayer(id, playersMap));
     }
 
@@ -192,15 +358,21 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
       ir.push(resolvePlayer(id, playersMap));
     }
 
+    const limits = buildRosterLimits(league.roster_positions);
     const settings: LeagueSettings = {
       scoringFormat: inferScoring(league.scoring_settings),
       rosterSlots: buildRosterSlots(league.roster_positions),
       waiverType: league.settings?.waiver_type === 0 ? 'none' : 'rolling',
       numTeams: league.total_rosters,
+      maxRosterSize: limits.maxRosterSize,
+      benchSlots: limits.benchSlots,
+      irSlots: limits.irSlots,
+      taxiSlots: league.settings?.taxi_slots ?? 0,
+      taxiYears: league.settings?.taxi_years,
     };
 
     return {
-      roster: { starters, bench, ir },
+      roster: { starters, bench, ir, taxi },
       settings,
       raw: { league, roster },
     };
@@ -252,7 +424,12 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
     _leagueId: string,
     roster: NormalizedRoster
   ): Promise<PlayerWeekStats[]> {
-    const all = [...roster.starters, ...roster.bench, ...(roster.ir ?? [])];
+    const all = [
+      ...roster.starters,
+      ...roster.bench,
+      ...(roster.ir ?? []),
+      ...(roster.taxi ?? []),
+    ];
     return all.map((p) => ({
       playerId: p.playerId,
       name: p.name,
@@ -263,17 +440,145 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
   }
 
   async submitAddDrop(
-    _account: ConnectedAccount,
+    account: ConnectedAccount,
     leagueId: string,
-    _teamId: string,
+    teamId: string,
     addPlayerId: string,
     dropPlayerId: string
   ): Promise<TransactionResult> {
-    return {
-      success: false,
-      message: 'Sleeper does not expose a public write API. Open Sleeper to complete the swap.',
-      deepLink: `sleeper://league/${leagueId}?add=${addPlayerId}&drop=${dropPlayerId}`,
+    const token = account.credentials.sleeperToken;
+    if (!token) {
+      return {
+        success: false,
+        message: 'Sleeper add/drop requires full sign-in (sleeperToken). Open Sleeper to complete the swap.',
+        deepLink: `sleeper://league/${leagueId}?add=${addPlayerId}&drop=${dropPlayerId}`,
+      };
+    }
+    return this.createSleeperTransaction(token, leagueId, teamId, addPlayerId, dropPlayerId);
+  }
+
+  async submitDrop(
+    account: ConnectedAccount,
+    leagueId: string,
+    teamId: string,
+    dropPlayerId: string
+  ): Promise<TransactionResult> {
+    const token = account.credentials.sleeperToken;
+    if (!token) {
+      return {
+        success: false,
+        message: 'Sleeper drop requires full sign-in (sleeperToken). Open Sleeper to drop the player.',
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    }
+    return this.createSleeperTransaction(token, leagueId, teamId, undefined, dropPlayerId);
+  }
+
+  async submitTaxiMove(
+    account: ConnectedAccount,
+    leagueId: string,
+    teamId: string,
+    playerId: string
+  ): Promise<TransactionResult> {
+    const token = account.credentials.sleeperToken;
+    if (!token) {
+      return {
+        success: false,
+        message: 'Moving to taxi requires full Sleeper sign-in (sleeperToken).',
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    }
+
+    const { roster } = await this.getTeamRoster(account, leagueId, teamId);
+    const taxiIds = (roster.taxi ?? []).map((p) => p.playerId);
+    if (taxiIds.includes(playerId)) {
+      return { success: true, message: 'Player is already on your taxi squad.' };
+    }
+    if (!roster.bench.some((p) => p.playerId === playerId)) {
+      return {
+        success: false,
+        message: 'Only bench players can be moved to taxi. Adjust your lineup in Sleeper first.',
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    }
+
+    const mutation = `mutation roster_update_taxi($league_id: String!, $roster_id: Int!, $taxi: [String!]!) {
+  roster_update_taxi(league_id: $league_id, roster_id: $roster_id, taxi: $taxi) {
+    roster_id
+    taxi
+  }
+}`;
+
+    try {
+      await sleeperGraphQL<{ roster_update_taxi: { roster_id: number } }>(
+        'roster_update_taxi',
+        mutation,
+        {
+          league_id: leagueId,
+          roster_id: parseInt(teamId, 10),
+          taxi: [...taxiIds, playerId],
+        },
+        token
+      );
+      return {
+        success: true,
+        message: 'Player moved to taxi squad on Sleeper.',
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: (err as Error).message || 'Sleeper taxi move failed.',
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    }
+  }
+
+  private async createSleeperTransaction(
+    token: string,
+    leagueId: string,
+    teamId: string,
+    addPlayerId: string | undefined,
+    dropPlayerId: string
+  ): Promise<TransactionResult> {
+    const rosterId = parseInt(teamId, 10);
+    const mutation = `mutation league_create_transaction($league_id: String!, $type: String!, $k_adds: [String], $v_adds: [Int], $k_drops: [String], $v_drops: [Int]) {
+  league_create_transaction(league_id: $league_id, type: $type, k_adds: $k_adds, v_adds: $v_adds, k_drops: $k_drops, v_drops: $v_drops) {
+    transaction_id
+    status
+    type
+  }
+}`;
+
+    const variables: Record<string, unknown> = {
+      league_id: leagueId,
+      type: 'free_agent',
+      k_adds: addPlayerId ? [addPlayerId] : [],
+      v_adds: addPlayerId ? [rosterId] : [],
+      k_drops: [dropPlayerId],
+      v_drops: [rosterId],
     };
+
+    try {
+      const data = await sleeperGraphQL<{ league_create_transaction: { transaction_id: string } }>(
+        'league_create_transaction',
+        mutation,
+        variables,
+        token
+      );
+      const label = addPlayerId ? 'Add/drop' : 'Drop';
+      return {
+        success: true,
+        message: `${label} submitted on Sleeper (transaction ${data.league_create_transaction.transaction_id}).`,
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    } catch (err) {
+      return {
+        success: false,
+        message: (err as Error).message || 'Sleeper transaction failed.',
+        deepLink: `sleeper://league/${leagueId}`,
+      };
+    }
   }
 
   async submitLineupChange(
@@ -315,44 +620,25 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
       }
     }
 
-    const mutation = `
-      mutation UpdateRosterStarters($leagueId: String!, $rosterId: Int!, $starters: [String!]!) {
-        update_roster_starters(league_id: $leagueId, roster_id: $rosterId, starters: $starters) {
-          roster_id
-          starters
-        }
-      }
-    `;
+    // Matches Sleeper's own web/mobile app mutation captured from the client bundle.
+    const mutation = `mutation roster_update_starters($league_id: String!, $roster_id: Int!, $starters: [String!]!) {
+  roster_update_starters(league_id: $league_id, roster_id: $roster_id, starters: $starters) {
+    roster_id
+    starters
+  }
+}`;
 
     try {
-      const res = await fetch('https://api.sleeper.app/graphql', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Authorization: `Bearer ${token}`,
+      await sleeperGraphQL<{ roster_update_starters: { roster_id: number } }>(
+        'roster_update_starters',
+        mutation,
+        {
+          league_id: leagueId,
+          roster_id: parseInt(teamId, 10),
+          starters: starterIds,
         },
-        body: JSON.stringify({
-          query: mutation,
-          variables: {
-            leagueId,
-            rosterId: parseInt(teamId, 10),
-            starters: starterIds,
-          },
-        }),
-      });
-      const data = (await res.json()) as {
-        data?: { update_roster_starters?: { roster_id: number } };
-        errors?: Array<{ message: string }>;
-      };
-      if (!res.ok || data.errors?.length) {
-        return {
-          success: false,
-          message:
-            data.errors?.[0]?.message ??
-            `Sleeper lineup update failed (${res.status}). Open Sleeper to complete.`,
-          deepLink: `sleeper://league/${leagueId}`,
-        };
-      }
+        token
+      );
       return {
         success: true,
         message: 'Lineup updated on Sleeper.',
@@ -361,7 +647,9 @@ export class SleeperAdapter implements FantasyPlatformAdapter {
     } catch (err) {
       return {
         success: false,
-        message: (err as Error).message,
+        message:
+          (err as Error).message ||
+          `Sleeper lineup update failed. Open Sleeper to complete.`,
         deepLink: `sleeper://league/${leagueId}`,
       };
     }

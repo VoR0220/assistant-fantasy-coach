@@ -66,6 +66,12 @@ export interface PlayerEntry {
   injuryStatus?: string;
   /** Lineup slot the player currently occupies (e.g. QB, FLEX, BN) */
   lineupSlot?: string;
+  /** NFL seasons played (Sleeper years_exp) — used for taxi eligibility */
+  yearsExp?: number;
+  /** Sleeper status: Active, Inactive, Injured Reserve, etc. */
+  playerStatus?: string;
+  /** Sleeper active flag — false for inactive/retired players */
+  active?: boolean;
   fantasyPoints?: { week?: number; season?: number };
 }
 
@@ -73,6 +79,8 @@ export interface NormalizedRoster {
   starters: PlayerEntry[];
   bench: PlayerEntry[];
   ir?: PlayerEntry[];
+  /** Sleeper taxi squad — does not count against roster limit */
+  taxi?: PlayerEntry[];
 }
 
 export interface LeagueSettings {
@@ -80,6 +88,14 @@ export interface LeagueSettings {
   rosterSlots: Record<string, number>;
   waiverType: 'faab' | 'rolling' | 'none';
   numTeams: number;
+  /** Starters + bench + IR slots (excludes taxi) */
+  maxRosterSize?: number;
+  benchSlots?: number;
+  irSlots?: number;
+  /** Sleeper taxi squad settings */
+  taxiSlots?: number;
+  /** Max years of experience for taxi eligibility (Sleeper taxi_years) */
+  taxiYears?: number;
 }
 
 export interface SwapPlayerRef {
@@ -98,13 +114,17 @@ export interface NewsSnippet {
 
 export interface PlatformCredentials {
   username?: string;
+  /** Email or phone for Sleeper password sign-in */
+  email?: string;
+  /** Password for Sleeper sign-in; forwarded to Sleeper only, never persisted */
+  password?: string;
   userId?: string;
   leagueId?: string;
   espnS2?: string;
   swid?: string;
   accessToken?: string;
   refreshToken?: string;
-  /** Sleeper private GraphQL bearer token for lineup writes */
+  /** Sleeper private GraphQL token for lineup writes */
   sleeperToken?: string;
 }
 
@@ -140,7 +160,12 @@ export interface TransactionResult {
   deepLink?: string;
 }
 
-export type RecommendationKind = 'add_drop' | 'lineup_sit_start' | 'lineup_flex_move';
+export type RecommendationKind =
+  | 'add_drop'
+  | 'lineup_sit_start'
+  | 'lineup_flex_move'
+  | 'roster_drop'
+  | 'move_to_taxi';
 
 export interface LineupActionInput {
   sitPlayer?: SwapPlayerRef;
@@ -154,6 +179,8 @@ export interface LineupActionInput {
 export interface SwapRecommendationInput {
   kind: RecommendationKind;
   dropPlayer?: SwapPlayerRef;
+  /** Equal or near-equal drop choices for the user to pick among (includes dropPlayer) */
+  dropAlternatives?: SwapPlayerRef[];
   addPlayer?: SwapPlayerRef;
   lineupAction?: LineupActionInput;
   confidence: number;

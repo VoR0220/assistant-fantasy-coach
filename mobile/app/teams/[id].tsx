@@ -11,23 +11,32 @@ import {
   View,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { api, type Team } from '../../lib/api';
+import { api, type RosterCompliance, type Team } from '../../lib/api';
 
 export default function TeamDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const [team, setTeam] = useState<Team | null>(null);
+  const [compliance, setCompliance] = useState<RosterCompliance | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [generating, setGenerating] = useState(false);
 
   const load = useCallback(async () => {
     if (!id) return;
     setRefreshing(true);
+    setError(null);
     try {
-      const { team: t } = await api.getTeam(id);
+      const { team: t, compliance: c } = await api.getTeam(id);
       setTeam(t);
+      if (c) setCompliance(c);
     } catch (err) {
-      Alert.alert('Error', (err as Error).message);
+      const message = (err as Error).message;
+      setError(message);
+      Alert.alert('Error', message);
     } finally {
       setRefreshing(false);
+      setLoading(false);
     }
   }, [id]);
 
@@ -51,12 +60,53 @@ export default function TeamDetailScreen() {
 
   async function sync() {
     if (!id) return;
-    const { team: t } = await api.syncTeam(id);
+    const { team: t, compliance: c } = await api.syncTeam(id);
     setTeam(t);
+    if (c) setCompliance(c);
     Alert.alert('Synced', 'Roster and free agents updated.');
   }
 
-  if (!team) return <View style={styles.container} />;
+  async function generateRecommendations() {
+    if (!id) return;
+    setGenerating(true);
+    try {
+      const { recommendations, compliance: c, team: t } = await api.analyzeLineup(id);
+      if (t) setTeam(t);
+      if (c) setCompliance(c);
+      if (recommendations.length === 0) {
+        Alert.alert('All clear', 'No roster, lineup, or waiver issues found.');
+      } else {
+        Alert.alert(
+          'Recommendations ready',
+          `${recommendations.length} suggestion(s) saved to Swap Ideas.`,
+          [{ text: 'View', onPress: () => router.push('/recommendations') }, { text: 'OK' }]
+        );
+      }
+    } catch (err) {
+      Alert.alert('Error', (err as Error).message);
+    } finally {
+      setGenerating(false);
+    }
+  }
+
+  if (loading) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.muted}>Loading team…</Text>
+      </View>
+    );
+  }
+
+  if (error || !team) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.errorText}>{error ?? 'Team not found'}</Text>
+        <Pressable style={styles.syncBtn} onPress={load}>
+          <Text style={styles.syncBtnText}>Retry</Text>
+        </Pressable>
+      </View>
+    );
+  }
 
   return (
     <ScrollView
@@ -67,6 +117,15 @@ export default function TeamDetailScreen() {
         <Text style={styles.platform}>{team.platform.toUpperCase()}</Text>
         <Text style={styles.title}>{team.teamName}</Text>
         <Text style={styles.subtitle}>{team.leagueName}</Text>
+        {compliance && compliance.maxSize > 0 && (
+          <Text style={[styles.compliance, compliance.overBy > 0 && styles.complianceWarn]}>
+            Roster {compliance.countable}/{compliance.maxSize}
+            {compliance.taxiSlots > 0
+              ? ` · Taxi ${compliance.taxiCount}/${compliance.taxiSlots}`
+              : ''}
+            {compliance.overBy > 0 ? ` · ${compliance.overBy} over` : ''}
+          </Text>
+        )}
       </View>
 
       <View style={styles.row}>
@@ -93,26 +152,10 @@ export default function TeamDetailScreen() {
         <Text style={styles.syncBtnText}>Sync Roster Now</Text>
       </Pressable>
 
-      <Pressable
-        style={styles.lineupBtn}
-        onPress={async () => {
-          try {
-            const { recommendations } = await api.analyzeLineup(id!);
-            if (recommendations.length === 0) {
-              Alert.alert('Lineup OK', 'No injury subs or flex moves needed right now.');
-            } else {
-              Alert.alert(
-                'Lineup Issues Found',
-                `${recommendations.length} suggestion(s). Check Swap Ideas for details after the next agent run, or enable weekly agent.`,
-                [{ text: 'View Swap Ideas', onPress: () => router.push('/recommendations') }, { text: 'OK' }]
-              );
-            }
-          } catch (err) {
-            Alert.alert('Error', (err as Error).message);
-          }
-        }}
-      >
-        <Text style={styles.lineupBtnText}>Check Injury & Flex Issues</Text>
+      <Pressable style={styles.lineupBtn} onPress={generateRecommendations} disabled={generating}>
+        <Text style={styles.lineupBtnText}>
+          {generating ? 'Generating…' : 'Generate Swap Ideas'}
+        </Text>
       </Pressable>
 
       <Text style={styles.section}>Starters</Text>
@@ -130,6 +173,24 @@ export default function TeamDetailScreen() {
           <Text style={styles.playerName}>{p.name}</Text>
         </View>
       ))}
+
+      {(team.roster?.taxi?.length ?? 0) > 0 && (
+        <>
+          <Text style={styles.section}>Taxi Squad</Text>
+          <Text style={styles.sectionHint}>Does not count against roster limit</Text>
+          {(team.roster?.taxi ?? []).map((p) => (
+            <View key={p.playerId} style={[styles.playerRow, styles.taxiRow]}>
+              <Text style={styles.pos}>TAXI</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.playerName}>{p.name}</Text>
+                {p.yearsExp !== undefined && (
+                  <Text style={styles.yearsExp}>{p.yearsExp} yr exp</Text>
+                )}
+              </View>
+            </View>
+          ))}
+        </>
+      )}
     </ScrollView>
   );
 }
@@ -140,6 +201,8 @@ const styles = StyleSheet.create({
   platform: { color: '#a8d5ba', fontSize: 12, fontWeight: '600' },
   title: { color: '#fff', fontSize: 22, fontWeight: '700', marginTop: 4 },
   subtitle: { color: '#cfe8d5', marginTop: 4 },
+  compliance: { color: '#a8d5ba', fontSize: 12, marginTop: 8 },
+  complianceWarn: { color: '#ffd4d4', fontWeight: '600' },
   row: {
     flexDirection: 'row',
     justifyContent: 'space-between',
@@ -173,6 +236,7 @@ const styles = StyleSheet.create({
   },
   lineupBtnText: { color: '#fff', fontWeight: '600' },
   section: { fontWeight: '700', fontSize: 16, marginHorizontal: 16, marginTop: 16, marginBottom: 8 },
+  sectionHint: { fontSize: 12, color: '#888', marginHorizontal: 16, marginBottom: 8, marginTop: -4 },
   playerRow: {
     flexDirection: 'row',
     backgroundColor: '#fff',
@@ -184,4 +248,9 @@ const styles = StyleSheet.create({
   },
   pos: { width: 36, fontWeight: '700', color: '#1a472a' },
   playerName: { flex: 1 },
+  taxiRow: { borderLeftWidth: 3, borderLeftColor: '#5f01d1' },
+  yearsExp: { fontSize: 11, color: '#888', marginTop: 2 },
+  centered: { justifyContent: 'center', alignItems: 'center', padding: 24 },
+  muted: { color: '#888' },
+  errorText: { color: '#c0392b', textAlign: 'center', marginBottom: 16 },
 });

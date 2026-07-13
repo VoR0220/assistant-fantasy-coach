@@ -4,9 +4,98 @@ import { SwapRecommendation } from '../models/SwapRecommendation.js';
 import { Team } from '../models/Team.js';
 import { User, getDecryptedCredentials } from '../models/User.js';
 import { getAdapter } from '../services/fantasy-platform/index.js';
-import type { PlatformCredentials } from '../types/index.js';
+import type { LineupChange, PlatformCredentials } from '../types/index.js';
 
 const router = Router();
+
+async function executeRecommendation(
+  rec: InstanceType<typeof SwapRecommendation>,
+  team: InstanceType<typeof Team>,
+  credentials: PlatformCredentials
+) {
+  const adapter = getAdapter(team.platform, team.sport);
+  const account = await adapter.connect(credentials);
+
+  if (rec.kind === 'roster_drop' && rec.dropPlayer) {
+    if (adapter.submitDrop) {
+      return adapter.submitDrop(
+        account,
+        team.externalLeagueId,
+        team.externalTeamId,
+        rec.dropPlayer.playerId
+      );
+    }
+    return { success: false, message: 'Drop not supported for this platform' };
+  }
+
+  if (rec.kind === 'move_to_taxi' && rec.lineupAction?.movePlayer) {
+    if (adapter.submitTaxiMove) {
+      return adapter.submitTaxiMove(
+        account,
+        team.externalLeagueId,
+        team.externalTeamId,
+        rec.lineupAction.movePlayer.playerId
+      );
+    }
+    return { success: false, message: 'Taxi moves not supported for this platform' };
+  }
+
+  if (rec.kind === 'lineup_sit_start' || rec.kind === 'lineup_flex_move') {
+    if (!adapter.submitLineupChange || !rec.lineupAction) {
+      return {
+        success: false,
+        message: 'Lineup write not supported. Update your lineup in the fantasy app.',
+      };
+    }
+    const changes: LineupChange[] = [];
+    const action = rec.lineupAction;
+    if (action.sitPlayer) {
+      changes.push({
+        playerId: action.sitPlayer.playerId,
+        fromSlot: action.fromSlot ?? action.sitPlayer.position,
+        toSlot: 'BN',
+      });
+    }
+    if (action.startPlayer) {
+      changes.push({
+        playerId: action.startPlayer.playerId,
+        fromSlot: 'BN',
+        toSlot: action.toSlot ?? action.startPlayer.position,
+      });
+    }
+    if (action.movePlayer) {
+      changes.push({
+        playerId: action.movePlayer.playerId,
+        fromSlot: action.fromSlot ?? 'FLEX',
+        toSlot: action.toSlot ?? action.movePlayer.position,
+      });
+    }
+    if (changes.length === 0) {
+      return { success: false, message: 'No lineup changes to apply' };
+    }
+    return adapter.submitLineupChange(
+      account,
+      team.externalLeagueId,
+      team.externalTeamId,
+      changes
+    );
+  }
+
+  if (rec.kind === 'add_drop' && rec.dropPlayer && rec.addPlayer) {
+    if (adapter.submitAddDrop) {
+      return adapter.submitAddDrop(
+        account,
+        team.externalLeagueId,
+        team.externalTeamId,
+        rec.addPlayer.playerId,
+        rec.dropPlayer.playerId
+      );
+    }
+    return { success: false, message: 'Add/drop not supported for this platform' };
+  }
+
+  return { success: false, message: 'Transaction not supported' };
+}
 
 router.get('/', authMiddleware, async (req: AuthRequest, res: Response) => {
   const week = req.query.week ? parseInt(String(req.query.week), 10) : undefined;
@@ -40,23 +129,6 @@ router.post('/:id/approve', authMiddleware, async (req: AuthRequest, res: Respon
     return;
   }
 
-  if (rec.kind === 'lineup_sit_start' || rec.kind === 'lineup_flex_move') {
-    rec.status = 'approved';
-    rec.decidedAt = new Date();
-    rec.executionResult = {
-      success: true,
-      message: 'Lineup change noted. Update your lineup in your fantasy app before lock.',
-    };
-    await rec.save();
-    res.json({ recommendation: rec, executionResult: rec.executionResult });
-    return;
-  }
-
-  if (!rec.dropPlayer || !rec.addPlayer) {
-    res.status(400).json({ error: 'Invalid add/drop recommendation' });
-    return;
-  }
-
   const team = await Team.findById(rec.teamId);
   if (!team) {
     res.status(404).json({ error: 'Team not found' });
@@ -71,22 +143,32 @@ router.post('/:id/approve', authMiddleware, async (req: AuthRequest, res: Respon
   const conn = user.platformConnections.find((c) => c.platform === team.platform);
   let executionResult: { success: boolean; message: string; deepLink?: string } = {
     success: false,
-    message: 'Transaction not supported',
+    message: 'Platform not connected',
   };
 
   if (conn) {
     const credentials = getDecryptedCredentials(conn) as PlatformCredentials;
-    const adapter = getAdapter(team.platform, team.sport);
-    const account = await adapter.connect(credentials);
-    if (adapter.submitAddDrop) {
-      executionResult = await adapter.submitAddDrop(
-        account,
-        team.externalLeagueId,
-        team.externalTeamId,
-        rec.addPlayer.playerId,
-        rec.dropPlayer.playerId
-      );
+
+    const selectedDropPlayerId = req.body?.selectedDropPlayerId as string | undefined;
+    if (
+      selectedDropPlayerId &&
+      (rec.kind === 'roster_drop' || rec.kind === 'add_drop') &&
+      selectedDropPlayerId !== rec.dropPlayer?.playerId
+    ) {
+      const alts = rec.dropAlternatives ?? [];
+      const chosen =
+        alts.find((a) => a.playerId === selectedDropPlayerId) ??
+        (rec.dropPlayer?.playerId === selectedDropPlayerId ? rec.dropPlayer : undefined);
+      if (!chosen) {
+        res.status(400).json({
+          error: 'selectedDropPlayerId is not among the equal drop alternatives',
+        });
+        return;
+      }
+      rec.dropPlayer = chosen;
     }
+
+    executionResult = await executeRecommendation(rec, team, credentials);
   }
 
   rec.status = executionResult.success ? 'executed' : 'approved';

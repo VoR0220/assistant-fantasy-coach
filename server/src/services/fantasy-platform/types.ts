@@ -41,6 +41,18 @@ export interface FantasyPlatformAdapter {
     addPlayerId: string,
     dropPlayerId: string
   ): Promise<TransactionResult>;
+  submitDrop?(
+    account: ConnectedAccount,
+    leagueId: string,
+    teamId: string,
+    dropPlayerId: string
+  ): Promise<TransactionResult>;
+  submitTaxiMove?(
+    account: ConnectedAccount,
+    leagueId: string,
+    teamId: string,
+    playerId: string
+  ): Promise<TransactionResult>;
   submitLineupChange?(
     account: ConnectedAccount,
     leagueId: string,
